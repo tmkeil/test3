@@ -40,6 +40,10 @@ import {
   type DeleteFamilyPreview,
   type DeleteNodePreview,
   createSuccessorBulk,
+  saveKMATReference,
+  getKMATReference,
+  deleteKMATReference,
+  type KMATReferenceRequest,
   type Node,
   type NodePicture,
   type NodeLink,
@@ -5009,6 +5013,10 @@ const VariantenbaumConfigurator: React.FC = () => {
   });
   const familySearchInputRef = useRef<HTMLInputElement>(null);
 
+  // KMAT Reference State
+  const [showKMATModal, setShowKMATModal] = useState(false);
+  const [kmatInput, setKMATInput] = useState('');
+
   // Auto-focus für Produktfamilien-Suchfeld
   useEffect(() => {
     if (isFamilyDropdownOpen && familySearchInputRef.current) {
@@ -5385,6 +5393,50 @@ const VariantenbaumConfigurator: React.FC = () => {
     staleTime: 30000,
   });
 
+  // KMAT Reference Query - Get existing KMAT for current configuration
+  const pathNodeIds = selectedFamily && Object.keys(selections).length > 0
+    ? [selectedFamily.id, ...Object.values(selections).map(s => s.id)].filter((id): id is number => id !== undefined)
+    : [];
+  
+  const kmatQuery = useQuery({
+    queryKey: ['kmat-reference', selectedFamily?.id, pathNodeIds],
+    queryFn: () => {
+      if (!selectedFamily?.id || pathNodeIds.length === 0) {
+        return Promise.resolve({ found: false });
+      }
+      return getKMATReference(selectedFamily.id, pathNodeIds);
+    },
+    enabled: !!selectedFamily?.id && !!typecode && pathNodeIds.length > 0 && user?.role === 'admin',
+    staleTime: 10000,
+  });
+
+  // KMAT Reference Mutation - Save/Update KMAT
+  const saveKMATMutation = useMutation({
+    mutationFn: saveKMATReference,
+    onSuccess: (data) => {
+      alert(`✅ ${data.message}: ${data.kmat_reference}`);
+      setShowKMATModal(false);
+      setKMATInput('');
+      // Invalidate KMAT query to refresh
+      queryClient.invalidateQueries({ queryKey: ['kmat-reference'] });
+    },
+    onError: (error: any) => {
+      alert(`❌ Fehler: ${error.message || 'Unbekannter Fehler'}`);
+    },
+  });
+
+  // KMAT Reference Delete Mutation
+  const deleteKMATMutation = useMutation({
+    mutationFn: deleteKMATReference,
+    onSuccess: () => {
+      alert('✅ KMAT Referenz gelöscht');
+      queryClient.invalidateQueries({ queryKey: ['kmat-reference'] });
+    },
+    onError: (error: any) => {
+      alert(`❌ Fehler: ${error.message || 'Unbekannter Fehler'}`);
+    },
+  });
+
   // Mutation: Create Successor Relationship (Bulk)
   const createSuccessorMutation = useMutation({
     mutationFn: createSuccessorBulk,
@@ -5569,7 +5621,7 @@ const VariantenbaumConfigurator: React.FC = () => {
       </div>
 
       {/* Sticky Product Code Banner - Nur anzeigen wenn Familie und mindestens eine Auswahl */}
-      {selectedFamily && Object.keys(selections).length > 0 && (
+      {selectedFamily && (
         <div className="sticky top-0 z-30 bg-gradient-to-r from-green-500 to-green-600 shadow-lg border-b-2 border-green-700">
           <div className="max-w-7xl mx-auto px-6 py-3">
             <div className="flex items-center justify-between gap-4">
@@ -5968,6 +6020,46 @@ const VariantenbaumConfigurator: React.FC = () => {
               <span className="font-medium text-green-700">Typcode: </span>
               <span className="ml-2 font-mono text-lg text-green-800">{displayTypecode}</span>
             </div>
+
+            {/* KMAT Reference (Admin only, vollständiges Produkt) */}
+            {user?.role === 'admin' && typecode && (
+              <div className="bg-white border border-blue-300 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="font-medium text-blue-700">KMAT Referenz:</span>
+                    {kmatQuery.data?.found && 'kmat_reference' in kmatQuery.data && kmatQuery.data.kmat_reference ? (
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-blue-800 bg-blue-50 px-3 py-1 rounded">
+                          {String(kmatQuery.data.kmat_reference)}
+                        </span>
+                        <button
+                          onClick={() => {
+                            if (kmatQuery.data && 'id' in kmatQuery.data && kmatQuery.data.id && confirm('KMAT Referenz wirklich löschen?')) {
+                              deleteKMATMutation.mutate(Number(kmatQuery.data.id));
+                            }
+                          }}
+                          className="text-sm text-red-600 hover:text-red-700 px-2 py-1 hover:bg-red-50 rounded transition-colors"
+                          disabled={deleteKMATMutation.isPending}
+                        >
+                          🗑️ Löschen
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-gray-500 italic">Nicht gesetzt</span>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => {
+                      setKMATInput((kmatQuery.data && 'kmat_reference' in kmatQuery.data && kmatQuery.data.kmat_reference) ? String(kmatQuery.data.kmat_reference) : '');
+                      setShowKMATModal(true);
+                    }}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+                  >
+                    {kmatQuery.data?.found ? '✏️ Bearbeiten' : '➕ Hinzufügen'}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Group Name (Produktfamilie) - von decode result ODER abgeleitet */}
             {(resultDecodeQuery.data?.group_name || (derivedGroupNameData?.is_unique && derivedGroupNameData?.group_name)) && (
@@ -6931,6 +7023,105 @@ const VariantenbaumConfigurator: React.FC = () => {
               </div>
             </div>
           </div>
+        )}
+
+        {/* KMAT Reference Modal */}
+        {showKMATModal && createPortal(
+          <div 
+            className="fixed inset-0 bg-black/60 grid place-items-center z-50" 
+            onClick={() => setShowKMATModal(false)}
+          >
+            <div 
+              className="bg-white rounded-xl w-[min(600px,92vw)] shadow-2xl p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-2xl font-bold text-gray-900">
+                  {kmatQuery.data?.found ? '✏️ KMAT Referenz bearbeiten' : '➕ KMAT Referenz hinzufügen'}
+                </h2>
+                <button 
+                  onClick={() => setShowKMATModal(false)} 
+                  className="text-gray-500 hover:text-gray-700 text-2xl"
+                >
+                  &times;
+                </button>
+              </div>
+
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                if (!kmatInput.trim()) {
+                  alert('Bitte KMAT Referenz eingeben');
+                  return;
+                }
+                if (!selectedFamily?.id || pathNodeIds.length === 0) {
+                  alert('Fehler: Ungültige Produktkonfiguration');
+                  return;
+                }
+
+                const request: KMATReferenceRequest = {
+                  family_id: selectedFamily.id,
+                  path_node_ids: pathNodeIds,
+                  full_typecode: typecode,
+                  kmat_reference: kmatInput.trim(),
+                };
+
+                saveKMATMutation.mutate(request);
+              }}>
+                <div className="space-y-4">
+                  {/* Produktinfo */}
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                    <div className="text-sm text-blue-700 font-medium mb-1">Konfiguriertes Produkt:</div>
+                    <div className="font-mono text-blue-900">{displayTypecode}</div>
+                  </div>
+
+                  {/* KMAT Input */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      KMAT Referenz <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={kmatInput}
+                      onChange={(e) => setKMATInput(e.target.value)}
+                      placeholder="z.B. KMAT-12345"
+                      className="w-full px-4 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                      autoFocus
+                      required
+                      disabled={saveKMATMutation.isPending}
+                    />
+                  </div>
+
+                  {/* Info Text */}
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                    <p className="text-sm text-gray-600">
+                      💡 Die KMAT Referenz wird nur für diese spezifische Produktkonfiguration gespeichert.
+                      Unterschiedliche Konfigurationen können unterschiedliche KMAT Referenzen haben.
+                    </p>
+                  </div>
+
+                  {/* Buttons */}
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      type="submit"
+                      disabled={saveKMATMutation.isPending}
+                      className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    >
+                      {saveKMATMutation.isPending ? 'Wird gespeichert...' : '💾 Speichern'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowKMATModal(false)}
+                      disabled={saveKMATMutation.isPending}
+                      className="px-6 py-2.5 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors font-semibold disabled:cursor-not-allowed"
+                    >
+                      Abbrechen
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>,
+          document.body
         )}
         </div>
       </div>

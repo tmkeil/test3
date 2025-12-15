@@ -3437,7 +3437,8 @@ def create_family(
         
         # name und label sind NOT NULL im Schema
         # Falls label leer/None: verwende leeren String (wie bestehende Nodes)
-        label = request.label.strip() if request.label and request.label.strip() else ''
+        label = (request.label or '').strip() if request.label else ''
+        label_en = (request.label_en or '').strip() if request.label_en else None
         
         # 1. Insert neue Produktfamilie
         cursor.execute("""
@@ -3448,8 +3449,8 @@ def create_family(
         """, (
             request.code.strip(),
             request.code.strip(),  # name = code (NOT NULL constraint)
-            label,  # label kann NULL sein
-            request.label_en,
+            label,  # label = '' wenn leer (NOT NULL constraint)
+            label_en,  # label_en kann NULL sein
             position
         ))
         

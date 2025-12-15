@@ -3328,6 +3328,181 @@ def decode_typecode(code: str):
 
 
 # ============================================================
+# KMAT References - Admin only
+# ============================================================
+
+class KMATReferenceRequest(BaseModel):
+    """Request zum Speichern/Updaten einer KMAT Referenz"""
+    family_id: int
+    path_node_ids: List[int]  # Array der Node IDs im Pfad
+    full_typecode: str
+    kmat_reference: str
+
+class KMATReferenceResponse(BaseModel):
+    """Response für KMAT Referenz Operationen"""
+    success: bool
+    id: int
+    kmat_reference: str
+    message: str
+
+@app.post("/api/admin/kmat-references", dependencies=[Depends(require_admin)])
+def create_or_update_kmat_reference(
+    request: KMATReferenceRequest,
+    current_user: TokenData = Depends(get_current_user)
+) -> KMATReferenceResponse:
+    """
+    Erstellt oder aktualisiert eine KMAT Referenz für ein konfiguriertes Produkt.
+    Die KMAT Referenz ist spezifisch für einen vollständigen Pfad durch den Baum.
+    Nur für Admins verfügbar.
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    try:
+        # Konvertiere path_node_ids zu JSON string
+        path_json = json.dumps(request.path_node_ids)
+        
+        # Prüfe ob bereits eine Referenz für diesen Pfad existiert
+        cursor.execute("""
+            SELECT id FROM kmat_references
+            WHERE family_id = ? AND path_node_ids = ?
+        """, (request.family_id, path_json))
+        
+        existing = cursor.fetchone()
+        
+        if existing:
+            # Update existing
+            cursor.execute("""
+                UPDATE kmat_references
+                SET kmat_reference = ?,
+                    full_typecode = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (request.kmat_reference, request.full_typecode, existing[0]))
+            
+            kmat_id = existing[0]
+            message = "KMAT Referenz aktualisiert"
+        else:
+            # Insert new
+            cursor.execute("""
+                INSERT INTO kmat_references (
+                    family_id, path_node_ids, full_typecode, 
+                    kmat_reference, created_by
+                ) VALUES (?, ?, ?, ?, ?)
+            """, (
+                request.family_id,
+                path_json,
+                request.full_typecode,
+                request.kmat_reference,
+                current_user.user_id
+            ))
+            
+            kmat_id = cursor.lastrowid
+            message = "KMAT Referenz erstellt"
+        
+        conn.commit()
+        
+        return KMATReferenceResponse(
+            success=True,
+            id=kmat_id,
+            kmat_reference=request.kmat_reference,
+            message=message
+        )
+        
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Fehler beim Speichern der KMAT Referenz: {str(e)}"
+        )
+    finally:
+        conn.close()
+
+
+@app.get("/api/kmat-references")
+def get_kmat_reference(
+    family_id: int,
+    path_node_ids: str  # JSON string: "[1,5,12,45]"
+) -> dict:
+    """
+    Ruft die KMAT Referenz für ein konfiguriertes Produkt ab.
+    Öffentlich verfügbar (alle User).
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT id, kmat_reference, full_typecode, 
+                   created_at, updated_at
+            FROM kmat_references
+            WHERE family_id = ? AND path_node_ids = ?
+        """, (family_id, path_node_ids))
+        
+        result = cursor.fetchone()
+        
+        if result:
+            return {
+                "found": True,
+                "id": result[0],
+                "kmat_reference": result[1],
+                "full_typecode": result[2],
+                "created_at": result[3],
+                "updated_at": result[4]
+            }
+        else:
+            return {"found": False}
+            
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Fehler beim Abrufen der KMAT Referenz: {str(e)}"
+        )
+    finally:
+        conn.close()
+
+
+@app.delete("/api/admin/kmat-references/{kmat_id}", dependencies=[Depends(require_admin)])
+def delete_kmat_reference(
+    kmat_id: int,
+    current_user: TokenData = Depends(get_current_user)
+) -> dict:
+    """
+    Löscht eine KMAT Referenz.
+    Nur für Admins verfügbar.
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("DELETE FROM kmat_references WHERE id = ?", (kmat_id,))
+        
+        if cursor.rowcount == 0:
+            raise HTTPException(
+                status_code=404,
+                detail=f"KMAT Referenz mit ID {kmat_id} nicht gefunden"
+            )
+        
+        conn.commit()
+        
+        return {
+            "success": True,
+            "message": f"KMAT Referenz {kmat_id} gelöscht"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Fehler beim Löschen der KMAT Referenz: {str(e)}"
+        )
+    finally:
+        conn.close()
+
+
+# ============================================================
 # Create Node - Knoten hinzufügen
 # ============================================================
 @app.post("/api/nodes", response_model=CreateNodeResponse)

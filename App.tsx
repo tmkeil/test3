@@ -5622,15 +5622,13 @@ const VariantenbaumConfigurator: React.FC = () => {
 
       {/* Sticky Product Code Banner - Nur anzeigen wenn Familie und mindestens eine Auswahl */}
       {selectedFamily && (
-        <div className="sticky top-0 z-30 bg-gradient-to-r from-green-500 to-green-600 shadow-lg border-b-2 border-green-700 overflow-visible">
-          <div className="overflow-x-auto overflow-y-visible">
-            <div className="max-w-7xl mx-auto px-6 py-3 min-w-max">
-              <div className="flex items-center justify-between gap-4">
-              <div className="flex flex-col gap-2 min-w-0">
-                {/* Produktschlüssel */}
-                <div className="flex items-center gap-3">
-                  <span className="text-white font-semibold text-sm">Aktueller Produktschlüssel:</span>
-                  <div className="flex items-center gap-1 bg-white/20 backdrop-blur-sm rounded-lg px-3 py-1.5">
+        <div className="sticky top-0 z-30 bg-gradient-to-r from-green-500 to-green-600 shadow-lg border-b-2 border-green-700">
+          <div className="max-w-7xl mx-auto px-6 py-4">
+            <div className="space-y-3">
+              {/* Produktschlüssel - erste Zeile */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-white font-semibold text-sm">Aktueller Produktschlüssel:</span>
+                <div className="flex items-center gap-1 bg-white/20 backdrop-blur-sm rounded-lg px-3 py-1.5">
                   {/* Familie */}
                   <div className="relative group">
                     <span 
@@ -5727,57 +5725,57 @@ const VariantenbaumConfigurator: React.FC = () => {
                     return segments;
                   })()}
                 </div>
-                
-                {/* Produktfamilie (Group Name) - falls abgeleitet oder von decode */}
-                {(resultDecodeQuery.data?.group_name || (derivedGroupNameData?.is_unique && derivedGroupNameData?.group_name)) && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-white/90 font-medium text-xs">Produktfamilie:</span>
-                    <span className="bg-white/30 backdrop-blur-sm text-white font-semibold text-sm px-3 py-1 rounded-md">
-                      {resultDecodeQuery.data?.group_name || derivedGroupNameData?.group_name}
-                    </span>
-                    {!resultDecodeQuery.data?.group_name && derivedGroupNameData?.is_unique && (
-                      <span className="text-white/70 text-xs italic">
-                        (abgeleitet)
-                      </span>
-                    )}
-                  </div>
-                )}
-                
-                {/* Mehrere mögliche Group Names */}
-                {!resultDecodeQuery.data?.group_name && derivedGroupNameData && !derivedGroupNameData.is_unique && derivedGroupNameData.possible_group_names.length > 0 && (
-                  <div className="flex items-start gap-2">
-                    <span className="text-white/90 font-medium text-xs pt-1">Mögliche Produktfamilien:</span>
-                    <div className="flex flex-wrap gap-1.5 max-w-xl">
-                      {derivedGroupNameData.possible_group_names.map((name, idx) => (
-                        <span key={idx} className="bg-yellow-400/30 backdrop-blur-sm text-white text-xs font-medium px-2 py-0.5 rounded">
-                          {name}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}  
-                
-                {/* KMAT Referenz - nur bei vollständigen Produkten */}
-                {resultDecodeQuery.data?.is_complete_product && kmatQuery.data?.found && 'kmat_reference' in kmatQuery.data && kmatQuery.data.kmat_reference ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-white/90 font-medium text-xs">KMAT:</span>
-                    <span className="bg-blue-400/30 backdrop-blur-sm text-white font-mono text-sm font-semibold px-3 py-1 rounded-md">
-                      {String(kmatQuery.data.kmat_reference)}
-                    </span>
-                  </div>
-                ) : null}
-              </div>
               </div>
               
-              {/* Optional: Scroll-to-Details Button */}
-              <button
-                onClick={() => {
-                  document.getElementById('result-section')?.scrollIntoView({ behavior: 'smooth' });
-                }}
-                className="text-white hover:text-green-100 text-xs font-medium flex items-center gap-1 transition-colors"
-              >
-                Details ↓
-              </button>
+              {/* Produktfamilie (Group Name) - zweite Zeile falls abgeleitet oder von decode */}
+              {(resultDecodeQuery.data?.group_name || (derivedGroupNameData?.is_unique && derivedGroupNameData?.group_name)) && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-white/90 font-medium text-xs">Produktfamilie:</span>
+                  <span className="bg-white/30 backdrop-blur-sm text-white font-semibold text-sm px-3 py-1 rounded-md">
+                    {resultDecodeQuery.data?.group_name || derivedGroupNameData?.group_name}
+                  </span>
+                  {!resultDecodeQuery.data?.group_name && derivedGroupNameData?.is_unique && (
+                    <span className="text-white/70 text-xs italic">
+                      (abgeleitet)
+                    </span>
+                  )}
+                </div>
+              )}
+              
+              {/* Mehrere mögliche Group Names - dritte Zeile */}
+              {!resultDecodeQuery.data?.group_name && derivedGroupNameData && !derivedGroupNameData.is_unique && derivedGroupNameData.possible_group_names.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <span className="text-white/90 font-medium text-xs">Mögliche Produktfamilien:</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {derivedGroupNameData.possible_group_names.map((name, idx) => (
+                      <span key={idx} className="bg-yellow-400/30 backdrop-blur-sm text-white text-xs font-medium px-2 py-0.5 rounded">
+                        {name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* KMAT Referenz - vierte Zeile nur bei vollständigen Produkten */}
+              {resultDecodeQuery.data?.is_complete_product && kmatQuery.data?.found && 'kmat_reference' in kmatQuery.data && kmatQuery.data.kmat_reference ? (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-white/90 font-medium text-xs">KMAT:</span>
+                  <span className="bg-blue-400/30 backdrop-blur-sm text-white font-mono text-sm font-semibold px-3 py-1 rounded-md">
+                    {String(kmatQuery.data.kmat_reference)}
+                  </span>
+                </div>
+              ) : null}
+              
+              {/* Scroll-to-Details Button - rechts ausgerichtet */}
+              <div className="flex justify-end">
+                <button
+                  onClick={() => {
+                    document.getElementById('result-section')?.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                  className="text-white hover:text-green-100 text-xs font-medium flex items-center gap-1 transition-colors"
+                >
+                  Details ↓
+                </button>
               </div>
             </div>
           </div>

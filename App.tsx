@@ -5622,8 +5622,8 @@ const VariantenbaumConfigurator: React.FC = () => {
 
       {/* Sticky Product Code Banner - Nur anzeigen wenn Familie und mindestens eine Auswahl */}
       {selectedFamily && (
-        <div className="sticky top-0 z-30 bg-gradient-to-r from-green-500 to-green-600 shadow-lg border-b-2 border-green-700">
-          <div className="overflow-x-auto">
+        <div className="sticky top-0 z-30 bg-gradient-to-r from-green-500 to-green-600 shadow-lg border-b-2 border-green-700 overflow-visible">
+          <div className="overflow-x-auto overflow-y-visible">
             <div className="max-w-7xl mx-auto px-6 py-3 min-w-max">
               <div className="flex items-center justify-between gap-4">
               <div className="flex flex-col gap-2 min-w-0">
@@ -5658,7 +5658,7 @@ const VariantenbaumConfigurator: React.FC = () => {
                       {selectedFamily.code}
                     </span>
                     {/* Tooltip für Familie */}
-                    <div className="fixed left-1/2 -translate-x-1/2 top-16 hidden group-hover:block z-[60] w-64 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
+                    <div className="absolute top-full left-0 mt-2 hidden group-hover:block z-[60] w-64 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
                       <div className="font-semibold mb-1">Level 0 - Produktfamilie</div>
                       {selectedFamily.label && (
                         <div className="text-gray-300">{selectedFamily.label}</div>
@@ -5690,7 +5690,7 @@ const VariantenbaumConfigurator: React.FC = () => {
                                 {selection.code}
                               </span>
                               {/* Tooltip für Code */}
-                              <div className="fixed left-1/2 -translate-x-1/2 top-16 hidden group-hover:block z-[60] w-72 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
+                              <div className="absolute top-full left-0 mt-2 hidden group-hover:block z-[60] w-72 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
                                 <div className="font-semibold mb-1">Level {i}</div>
                                 <div className="font-mono text-green-400 mb-2">{selection.code}</div>
                                 {displaySelection.name && (

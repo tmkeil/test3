@@ -5657,7 +5657,7 @@ const VariantenbaumConfigurator: React.FC = () => {
                       {selectedFamily.code}
                     </span>
                     {/* Tooltip für Familie */}
-                    <div className="absolute top-full left-0 mt-2 hidden group-hover:block z-50 w-64 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
+                    <div className="fixed left-1/2 -translate-x-1/2 top-20 hidden group-hover:block z-[60] w-64 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3">
                       <div className="font-semibold mb-1">Level 0 - Produktfamilie</div>
                       {selectedFamily.label && (
                         <div className="text-gray-300">{selectedFamily.label}</div>
@@ -5689,7 +5689,7 @@ const VariantenbaumConfigurator: React.FC = () => {
                                 {selection.code}
                               </span>
                               {/* Tooltip für Code */}
-                              <div className="absolute top-full left-0 mt-2 hidden group-hover:block z-50 w-72 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
+                              <div className="fixed left-1/2 -translate-x-1/2 top-20 hidden group-hover:block z-[60] w-72 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3">
                                 <div className="font-semibold mb-1">Level {i}</div>
                                 <div className="font-mono text-green-400 mb-2">{selection.code}</div>
                                 {displaySelection.name && (
@@ -5744,9 +5744,9 @@ const VariantenbaumConfigurator: React.FC = () => {
                 
                 {/* Mehrere mögliche Group Names */}
                 {!resultDecodeQuery.data?.group_name && derivedGroupNameData && !derivedGroupNameData.is_unique && derivedGroupNameData.possible_group_names.length > 0 && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-white/90 font-medium text-xs">Mögliche Produktfamilien:</span>
-                    <div className="flex gap-1.5">
+                  <div className="flex items-start gap-2">
+                    <span className="text-white/90 font-medium text-xs pt-1">Mögliche Produktfamilien:</span>
+                    <div className="flex flex-wrap gap-1.5 max-w-xl">
                       {derivedGroupNameData.possible_group_names.map((name, idx) => (
                         <span key={idx} className="bg-yellow-400/30 backdrop-blur-sm text-white text-xs font-medium px-2 py-0.5 rounded">
                           {name}
@@ -5754,7 +5754,7 @@ const VariantenbaumConfigurator: React.FC = () => {
                       ))}
                     </div>
                   </div>
-                )}
+                )}  
                 
                 {/* KMAT Referenz - nur bei vollständigen Produkten */}
                 {resultDecodeQuery.data?.is_complete_product && kmatQuery.data?.found && 'kmat_reference' in kmatQuery.data && kmatQuery.data.kmat_reference ? (
@@ -6091,9 +6091,9 @@ const VariantenbaumConfigurator: React.FC = () => {
             {!resultDecodeQuery.data?.group_name && derivedGroupNameData && !derivedGroupNameData.is_unique && derivedGroupNameData.possible_group_names.length > 0 && (
               <div className="bg-white border border-yellow-300 rounded-lg p-4">
                 <span className="font-medium text-yellow-700">Mögliche Produktfamilien: </span>
-                <div className="mt-2 flex flex-wrap gap-2">
+                <div className="mt-2 flex flex-wrap gap-2 max-w-4xl">
                   {derivedGroupNameData.possible_group_names.map((name, idx) => (
-                    <span key={idx} className="bg-yellow-100 text-yellow-800 text-sm font-medium px-3 py-1 rounded">
+                    <span key={idx} className="bg-yellow-100 text-yellow-800 text-sm font-medium px-3 py-1 rounded whitespace-nowrap">
                       {name}
                     </span>
                   ))}

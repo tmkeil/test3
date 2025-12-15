@@ -437,7 +437,8 @@ class CreateFamilyResponse(BaseModel):
     success: bool
     family_id: int
     code: str
-    label: str
+    label: str  # Kann leerer String sein
+    label_en: Optional[str] = None
     message: str
     
 class SubtreeInfo(BaseModel):
@@ -3469,7 +3470,8 @@ def create_family(
             success=True,
             family_id=family_id,
             code=request.code.strip(),
-            label=request.label,
+            label=label,  # Verwende den berechneten label ('' wenn leer)
+            label_en=label_en,
             message=f"Produktfamilie '{request.code}' erfolgreich erstellt"
         )
         

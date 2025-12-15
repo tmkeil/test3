@@ -5656,7 +5656,7 @@ const VariantenbaumConfigurator: React.FC = () => {
                       {selectedFamily.code}
                     </span>
                     {/* Tooltip für Familie */}
-                    <div className="absolute top-full left-0 mt-2 hidden group-hover:block z-[80] w-64 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
+                    <div className="absolute top-full left-0 mt-2 hidden group-hover:block z-[100] w-64 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
                       <div className="font-semibold mb-1">Level 0 - Produktfamilie</div>
                       {selectedFamily.label && (
                         <div className="text-gray-300">{selectedFamily.label}</div>
@@ -5688,7 +5688,7 @@ const VariantenbaumConfigurator: React.FC = () => {
                                 {selection.code}
                               </span>
                               {/* Tooltip für Code */}
-                              <div className="absolute top-full left-0 mt-2 hidden group-hover:block z-[80] w-72 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
+                              <div className="absolute top-full left-0 mt-2 hidden group-hover:block z-[100] w-72 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
                                 <div className="font-semibold mb-1">Level {i}</div>
                                 <div className="font-mono text-green-400 mb-2">{selection.code}</div>
                                 {displaySelection.name && (
@@ -5760,7 +5760,7 @@ const VariantenbaumConfigurator: React.FC = () => {
                           und {derivedGroupNameData.possible_group_names.length - 4} weitere
                         </span>
                         {/* Tooltip mit allen Namen */}
-                        <div className="absolute top-full left-0 mt-2 hidden group-hover:block z-[70] w-80 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
+                        <div className="absolute top-full left-0 mt-2 hidden group-hover:block z-[90] w-80 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
                           <div className="font-semibold mb-2">Alle möglichen Produktfamilien:</div>
                           <div className="flex flex-wrap gap-1.5">
                             {derivedGroupNameData.possible_group_names.map((name, idx) => (
@@ -5776,37 +5776,29 @@ const VariantenbaumConfigurator: React.FC = () => {
                 </div>
               )}
               
-              {/* KMAT Referenz - vierte Zeile nur bei vollständigen Produkten */}
-              {resultDecodeQuery.data?.is_complete_product && kmatQuery.data?.found && 'kmat_reference' in kmatQuery.data && kmatQuery.data.kmat_reference ? (
-                <div className="flex items-center justify-between gap-2 flex-wrap">
+              {/* Letzte Zeile: KMAT (falls vorhanden) + Details Button */}
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                {/* KMAT falls vollständiges Produkt */}
+                {resultDecodeQuery.data?.is_complete_product && kmatQuery.data?.found && 'kmat_reference' in kmatQuery.data && kmatQuery.data.kmat_reference ? (
                   <div className="flex items-center gap-2">
                     <span className="text-white/90 font-medium text-xs">KMAT:</span>
                     <span className="bg-blue-400/30 backdrop-blur-sm text-white font-mono text-sm font-semibold px-3 py-1 rounded-md">
                       {String(kmatQuery.data.kmat_reference)}
                     </span>
                   </div>
-                  <button
-                    onClick={() => {
-                      document.getElementById('result-section')?.scrollIntoView({ behavior: 'smooth' });
-                    }}
-                    className="text-white hover:text-green-100 text-xs font-medium flex items-center gap-1 transition-colors ml-auto"
-                  >
-                    Details ↓
-                  </button>
-                </div>
-              ) : (
-                /* Details Button allein wenn keine KMAT */
-                <div className="flex justify-end">
-                  <button
-                    onClick={() => {
-                      document.getElementById('result-section')?.scrollIntoView({ behavior: 'smooth' });
-                    }}
-                    className="text-white hover:text-green-100 text-xs font-medium flex items-center gap-1 transition-colors"
-                  >
-                    Details ↓
-                  </button>
-                </div>
-              )}
+                ) : (
+                  <div></div>
+                )}
+                {/* Details Button immer rechts */}
+                <button
+                  onClick={() => {
+                    document.getElementById('result-section')?.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                  className="text-white hover:text-green-100 text-xs font-medium flex items-center gap-1 transition-colors"
+                >
+                  Details ↓
+                </button>
+              </div>
             </div>
           </div>
         </div>

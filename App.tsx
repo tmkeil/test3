@@ -5622,10 +5622,10 @@ const VariantenbaumConfigurator: React.FC = () => {
 
       {/* Sticky Product Code Banner - Nur anzeigen wenn Familie und mindestens eine Auswahl */}
       {selectedFamily && (
-        <div className="sticky top-0 z-30 bg-gradient-to-r from-green-500 to-green-600 shadow-lg border-b-2 border-green-700">
-          <div className="max-w-7xl mx-auto px-6 py-3">
+        <div className="sticky top-0 z-30 bg-gradient-to-r from-green-500 to-green-600 shadow-lg border-b-2 border-green-700 overflow-x-auto">
+          <div className="max-w-7xl mx-auto px-6 py-3 min-w-max">
             <div className="flex items-center justify-between gap-4">
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-2 min-w-0">
                 {/* Produktschlüssel */}
                 <div className="flex items-center gap-3">
                   <span className="text-white font-semibold text-sm">Aktueller Produktschlüssel:</span>
@@ -5755,6 +5755,16 @@ const VariantenbaumConfigurator: React.FC = () => {
                     </div>
                   </div>
                 )}
+                
+                {/* KMAT Referenz - nur bei vollständigen Produkten */}
+                {resultDecodeQuery.data?.is_complete_product && kmatQuery.data?.found && 'kmat_reference' in kmatQuery.data && kmatQuery.data.kmat_reference ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-white/90 font-medium text-xs">KMAT:</span>
+                    <span className="bg-blue-400/30 backdrop-blur-sm text-white font-mono text-sm font-semibold px-3 py-1 rounded-md">
+                      {String(kmatQuery.data.kmat_reference)}
+                    </span>
+                  </div>
+                ) : null}
               </div>
               </div>
               
@@ -6022,7 +6032,7 @@ const VariantenbaumConfigurator: React.FC = () => {
             </div>
 
             {/* KMAT Reference (Admin only, vollständiges Produkt) */}
-            {user?.role === 'admin' && typecode && (
+            {user?.role === 'admin' && typecode && resultDecodeQuery.data?.is_complete_product && (
               <div className="bg-white border border-blue-300 rounded-lg p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -7108,10 +7118,29 @@ const VariantenbaumConfigurator: React.FC = () => {
                     >
                       {saveKMATMutation.isPending ? 'Wird gespeichert...' : '💾 Speichern'}
                     </button>
+                    
+                    {/* Delete button - nur wenn KMAT bereits existiert */}
+                    {kmatQuery.data?.found && kmatQuery.data && 'id' in kmatQuery.data && kmatQuery.data.id ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const kmatId = kmatQuery.data && 'id' in kmatQuery.data ? Number(kmatQuery.data.id) : null;
+                          if (kmatId && confirm('KMAT Referenz wirklich löschen?')) {
+                            deleteKMATMutation.mutate(kmatId);
+                            setShowKMATModal(false);
+                          }
+                        }}
+                        disabled={deleteKMATMutation.isPending}
+                        className="px-6 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed"
+                      >
+                        {deleteKMATMutation.isPending ? 'Wird gelöscht...' : '🗑️ Löschen'}
+                      </button>
+                    ) : null}
+                    
                     <button
                       type="button"
                       onClick={() => setShowKMATModal(false)}
-                      disabled={saveKMATMutation.isPending}
+                      disabled={saveKMATMutation.isPending || deleteKMATMutation.isPending}
                       className="px-6 py-2.5 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors font-semibold disabled:cursor-not-allowed"
                     >
                       Abbrechen

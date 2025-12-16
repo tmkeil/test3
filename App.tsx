@@ -5016,6 +5016,9 @@ const VariantenbaumConfigurator: React.FC = () => {
   // KMAT Reference State
   const [showKMATModal, setShowKMATModal] = useState(false);
   const [kmatInput, setKMATInput] = useState('');
+  
+  // Tooltip State für Banner
+  const [hoveredTooltip, setHoveredTooltip] = useState<{type: 'family' | 'code' | 'more', level?: number, data?: any} | null>(null);
 
   // Auto-focus für Produktfamilien-Suchfeld
   useEffect(() => {
@@ -5630,9 +5633,11 @@ const VariantenbaumConfigurator: React.FC = () => {
                 <span className="text-white font-semibold text-sm">Aktueller Produktschlüssel:</span>
                 <div className="flex items-center gap-1 bg-white/20 backdrop-blur-sm rounded-lg px-3 py-1.5">
                   {/* Familie */}
-                  <div className="relative group">
+                  <div className="relative">
                     <span 
                       className="font-mono font-bold text-white text-lg cursor-pointer hover:text-green-100 transition-colors"
+                      onMouseEnter={() => setHoveredTooltip({type: 'family', data: selectedFamily})}
+                      onMouseLeave={() => setHoveredTooltip(null)}
                       onClick={() => {
                         // Familie hat keine AvailableOption, nur Node-Daten
                         setBannerDetailSelection({ 
@@ -5655,13 +5660,6 @@ const VariantenbaumConfigurator: React.FC = () => {
                     >
                       {selectedFamily.code}
                     </span>
-                    {/* Tooltip für Familie */}
-                    <div className="absolute top-full left-0 mt-2 hidden group-hover:block z-[100] w-64 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
-                      <div className="font-semibold mb-1">Level 0 - Produktfamilie</div>
-                      {selectedFamily.label && (
-                        <div className="text-gray-300">{selectedFamily.label}</div>
-                      )}
-                    </div>
                   </div>
                   
                   {/* Level Codes mit Wildcards */}
@@ -5677,9 +5675,11 @@ const VariantenbaumConfigurator: React.FC = () => {
                         <React.Fragment key={i}>
                           <span className="text-white/60 font-bold">-</span>
                           {selection ? (
-                            <div className="relative group">
+                            <div className="relative">
                               <span 
                                 className="font-mono font-bold text-white text-lg cursor-pointer hover:text-green-100 transition-colors"
+                                onMouseEnter={() => setHoveredTooltip({type: 'code', level: i, data: {selection, displaySelection}})}
+                                onMouseLeave={() => setHoveredTooltip(null)}
                                 onClick={() => {
                                   setBannerDetailSelection({ level: i, option: selection });
                                   setShowBannerDetailModal(true);
@@ -5687,33 +5687,6 @@ const VariantenbaumConfigurator: React.FC = () => {
                               >
                                 {selection.code}
                               </span>
-                              {/* Tooltip für Code */}
-                              <div className="absolute top-full left-0 mt-2 hidden group-hover:block z-[100] w-72 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
-                                <div className="font-semibold mb-1">Level {i}</div>
-                                <div className="font-mono text-green-400 mb-2">{selection.code}</div>
-                                {displaySelection.name && (
-                                  <div className="mb-2">
-                                    <span className="text-gray-400">Name:</span>
-                                    <div className="mt-1">
-                                      <span className="bg-purple-600 text-white text-xs font-medium px-2 py-1 rounded">
-                                        {displaySelection.name}
-                                      </span>
-                                    </div>
-                                  </div>
-                                )}
-                                {displaySelection.label && (
-                                  <div className="mb-2">
-                                    <span className="text-gray-400">DE:</span>
-                                    <div className="text-gray-200 whitespace-pre-line">{displaySelection.label}</div>
-                                  </div>
-                                )}
-                                {displaySelection.label_en && (
-                                  <div>
-                                    <span className="text-gray-400">EN:</span>
-                                    <div className="text-gray-200 whitespace-pre-line">{displaySelection.label_en}</div>
-                                  </div>
-                                )}
-                              </div>
                             </div>
                           ) : (
                             <span className="font-mono font-bold text-white/40 text-lg">*</span>
@@ -5755,21 +5728,14 @@ const VariantenbaumConfigurator: React.FC = () => {
                     ))}
                     {/* Falls mehr als 4, zeige "und X weitere" mit Tooltip */}
                     {derivedGroupNameData.possible_group_names.length > 4 && (
-                      <div className="relative group">
-                        <span className="bg-yellow-500/40 backdrop-blur-sm text-white text-xs font-medium px-2 py-0.5 rounded cursor-help">
+                      <div className="relative">
+                        <span 
+                          className="bg-yellow-500/40 backdrop-blur-sm text-white text-xs font-medium px-2 py-0.5 rounded cursor-help"
+                          onMouseEnter={() => setHoveredTooltip({type: 'more', data: derivedGroupNameData.possible_group_names})}
+                          onMouseLeave={() => setHoveredTooltip(null)}
+                        >
                           und {derivedGroupNameData.possible_group_names.length - 4} weitere
                         </span>
-                        {/* Tooltip mit allen Namen */}
-                        <div className="absolute top-full left-0 mt-2 hidden group-hover:block z-[90] w-80 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
-                          <div className="font-semibold mb-2">Alle möglichen Produktfamilien:</div>
-                          <div className="flex flex-wrap gap-1.5">
-                            {derivedGroupNameData.possible_group_names.map((name, idx) => (
-                              <span key={idx} className="bg-yellow-600 text-white text-xs font-medium px-2 py-1 rounded">
-                                {name}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
                       </div>
                     )}
                   </div>
@@ -7171,6 +7137,61 @@ const VariantenbaumConfigurator: React.FC = () => {
                 </div>
               </form>
             </div>
+          </div>,
+          document.body
+        )}
+        
+        {/* Banner Tooltips - Portal */}
+        {hoveredTooltip && createPortal(
+          <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] w-80 bg-gray-900 text-white text-sm rounded-lg shadow-xl p-3 pointer-events-none">
+            {hoveredTooltip.type === 'family' && (
+              <>
+                <div className="font-semibold mb-1">Level 0 - Produktfamilie</div>
+                {hoveredTooltip.data?.label && (
+                  <div className="text-gray-300">{hoveredTooltip.data.label}</div>
+                )}
+              </>
+            )}
+            {hoveredTooltip.type === 'code' && (
+              <>
+                <div className="font-semibold mb-1">Level {hoveredTooltip.level}</div>
+                <div className="font-mono text-green-400 mb-2">{hoveredTooltip.data?.selection.code}</div>
+                {hoveredTooltip.data?.displaySelection.name && (
+                  <div className="mb-2">
+                    <span className="text-gray-400">Name:</span>
+                    <div className="mt-1">
+                      <span className="bg-purple-600 text-white text-xs font-medium px-2 py-1 rounded">
+                        {hoveredTooltip.data.displaySelection.name}
+                      </span>
+                    </div>
+                  </div>
+                )}
+                {hoveredTooltip.data?.displaySelection.label && (
+                  <div className="mb-2">
+                    <span className="text-gray-400">DE:</span>
+                    <div className="text-gray-200 whitespace-pre-line">{hoveredTooltip.data.displaySelection.label}</div>
+                  </div>
+                )}
+                {hoveredTooltip.data?.displaySelection.label_en && (
+                  <div>
+                    <span className="text-gray-400">EN:</span>
+                    <div className="text-gray-200 whitespace-pre-line">{hoveredTooltip.data.displaySelection.label_en}</div>
+                  </div>
+                )}
+              </>
+            )}
+            {hoveredTooltip.type === 'more' && (
+              <>
+                <div className="font-semibold mb-2">Alle möglichen Produktfamilien:</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(hoveredTooltip.data as string[]).map((name, idx) => (
+                    <span key={idx} className="bg-yellow-600 text-white text-xs font-medium px-2 py-1 rounded">
+                      {name}
+                    </span>
+                  ))}
+                </div>
+              </>
+            )}
           </div>,
           document.body
         )}

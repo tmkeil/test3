@@ -412,3 +412,37 @@ CREATE TABLE IF NOT EXISTS kmat_references (
 CREATE INDEX IF NOT EXISTS idx_kmat_family ON kmat_references(family_id);
 CREATE INDEX IF NOT EXISTS idx_kmat_typecode ON kmat_references(full_typecode);
 CREATE INDEX IF NOT EXISTS idx_kmat_created_by ON kmat_references(created_by);
+
+-- ============================================================================
+-- Table: segment_subsegments
+-- Stores sub-segment definitions for code segments (character-level breakdown)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS segment_subsegments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    
+    -- Identification
+    family_code TEXT NOT NULL,  -- e.g., "BCC"
+    group_name TEXT NOT NULL,   -- e.g., "Cordset"
+    level INTEGER NOT NULL,      -- Which level this applies to (0 = family, 1 = first code, etc.)
+    
+    -- Optional: Only for specific schema pattern
+    pattern_string TEXT,  -- e.g., "3-5-4-2-3-6-5" - NULL means applies to all patterns
+    
+    -- Sub-segment definitions (JSON array)
+    -- Example: [{"start": 0, "end": 1, "name": "range"}, {"start": 1, "end": 3, "name": "connector size"}]
+    subsegments TEXT NOT NULL,
+    
+    -- Metadata
+    created_by INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    
+    -- Unique constraint: one definition per family/group/level/pattern combination
+    UNIQUE(family_code, group_name, level, pattern_string)
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_subseg_lookup ON segment_subsegments(family_code, group_name, level);

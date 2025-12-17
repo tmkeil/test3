@@ -7,6 +7,7 @@ import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { CodeHints } from './components/CodeHints';
 import { SuccessorWarning } from './components/SuccessorWarning';
 import { OptionCard } from './components/OptionCard';
+import { SchemaVisualization } from './components/SchemaVisualization';
 import { 
   fetchProductFamilies, 
   fetchFamilyGroups,
@@ -43,6 +44,7 @@ import {
   saveKMATReference,
   getKMATReference,
   deleteKMATReference,
+  getFamilySchemaVisualization,
   type KMATReferenceRequest,
   type Node,
   type NodePicture,
@@ -58,6 +60,7 @@ import {
   type ConstraintCondition,
   type ConstraintCode,
   type CreateConstraintRequest,
+  type FamilySchemaVisualization,
 } from './api/client';
 import './App.css';
 
@@ -4981,6 +4984,8 @@ const VariantenbaumConfigurator: React.FC = () => {
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   const [selectedGroupFilter, setSelectedGroupFilter] = useState<string | null>(null);
   const [addNodeContext, setAddNodeContext] = useState<{ level: number; familyCode: string } | null>(null);
+  const [showSchemaVisualization, setShowSchemaVisualization] = useState(false);
+  const [schemaVisualizationData, setSchemaVisualizationData] = useState<FamilySchemaVisualization | null>(null);
   const [showResultImageModal, setShowResultImageModal] = useState(false);
   const [resultImageModalPictures, setResultImageModalPictures] = useState<NodePicture[]>([]);
   const [showResultLinksModal, setShowResultLinksModal] = useState(false);
@@ -5742,7 +5747,7 @@ const VariantenbaumConfigurator: React.FC = () => {
                 </div>
               )}
               
-              {/* Letzte Zeile: KMAT (falls vorhanden) + Details Button */}
+              {/* Letzte Zeile: KMAT (falls vorhanden) + Schema & Details Buttons */}
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 {/* KMAT falls vollständiges Produkt */}
                 {resultDecodeQuery.data?.is_complete_product && kmatQuery.data?.found && 'kmat_reference' in kmatQuery.data && kmatQuery.data.kmat_reference ? (
@@ -5755,15 +5760,31 @@ const VariantenbaumConfigurator: React.FC = () => {
                 ) : (
                   <div></div>
                 )}
-                {/* Details Button immer rechts */}
-                <button
-                  onClick={() => {
-                    document.getElementById('result-section')?.scrollIntoView({ behavior: 'smooth' });
-                  }}
-                  className="text-white hover:text-green-100 text-xs font-medium flex items-center gap-1 transition-colors"
-                >
-                  Details ↓
-                </button>
+                {/* Schema & Details Buttons rechts */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={async () => {
+                      try {
+                        const data = await getFamilySchemaVisualization(selectedFamily.code!);
+                        setSchemaVisualizationData(data);
+                        setShowSchemaVisualization(true);
+                      } catch (error) {
+                        console.error('Fehler beim Laden der Schema-Visualisierung:', error);
+                      }
+                    }}
+                    className="text-white hover:text-blue-200 text-xs font-medium flex items-center gap-1 transition-colors"
+                  >
+                    📊 Schema
+                  </button>
+                  <button
+                    onClick={() => {
+                      document.getElementById('result-section')?.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                    className="text-white hover:text-green-100 text-xs font-medium flex items-center gap-1 transition-colors"
+                  >
+                    Details ↓
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -7194,6 +7215,17 @@ const VariantenbaumConfigurator: React.FC = () => {
             )}
           </div>,
           document.body
+        )}
+        
+        {/* Schema Visualization Modal */}
+        {showSchemaVisualization && schemaVisualizationData && (
+          <SchemaVisualization
+            data={schemaVisualizationData}
+            onClose={() => {
+              setShowSchemaVisualization(false);
+              setSchemaVisualizationData(null);
+            }}
+          />
         )}
         </div>
       </div>

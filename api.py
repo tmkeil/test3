@@ -6625,6 +6625,225 @@ def root():
 
 
 # ============================================================
+# Schema Visualization - Typecode Pattern Analysis
+# ============================================================
+
+class SchemaPattern(BaseModel):
+    """Ein einzigartiges Schema-Muster"""
+    pattern: List[int]  # z.B. [3, 5, 3] für BTL5-H1104-M9999
+    pattern_string: str  # z.B. "3-5-3"
+    example_code: str  # Beispiel Typcode mit diesem Muster
+    segment_names: List[Optional[str]]  # Namen der Segmente (wenn vorhanden)
+    segment_examples: List[str]  # Beispielwerte für jedes Segment
+    count: int  # Wie oft dieses Muster vorkommt
+
+class GroupSchema(BaseModel):
+    """Schema-Muster für eine group_name"""
+    group_name: str
+    patterns: List[SchemaPattern]
+
+class FamilySchemaVisualization(BaseModel):
+    """Gesamte Schema-Visualisierung für eine Produktfamilie"""
+    family_code: str
+    family_label: Optional[str]
+    has_group_names: bool
+    groups: List[GroupSchema]  # Entweder nach group_name gruppiert oder alle zusammen
+
+@app.get("/api/family-schema-visualization/{family_code}", response_model=FamilySchemaVisualization)
+def get_family_schema_visualization(family_code: str):
+    """
+    Analysiert und visualisiert alle Typcode-Schema-Muster einer Produktfamilie.
+    
+    Logik:
+    - Wenn Produktfamilie group_names hat:
+      - Zeige Schemas pro group_name
+      - Ignoriere Typecodes ohne group_name
+    - Wenn Produktfamilie KEINE group_names hat UND max 5 einzigartige Schemas:
+      - Zeige alle Schemas der gesamten Familie
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Familie finden
+        cursor.execute("""
+            SELECT id, code, label, label_en
+            FROM nodes
+            WHERE code = ? AND level = 0
+        """, (family_code,))
+        
+        family = cursor.fetchone()
+        if not family:
+            raise HTTPException(status_code=404, detail=f"Familie '{family_code}' nicht gefunden")
+        
+        family_id, code, label, label_en = family
+        
+        # Prüfe ob diese Familie group_names hat
+        cursor.execute("""
+            SELECT COUNT(DISTINCT group_name)
+            FROM nodes
+            WHERE family_id = ? AND group_name IS NOT NULL
+        """, (family_id,))
+        
+        has_group_names = cursor.fetchone()[0] > 0
+        
+        groups = []
+        
+        if has_group_names:
+            # Fall 1: Familie hat group_names - gruppiere nach group_name
+            cursor.execute("""
+                SELECT DISTINCT group_name
+                FROM nodes
+                WHERE family_id = ? AND group_name IS NOT NULL
+                ORDER BY group_name
+            """, (family_id,))
+            
+            group_names = [row[0] for row in cursor.fetchall()]
+            
+            for group_name in group_names:
+                patterns = _analyze_schemas_for_group(cursor, family_id, group_name)
+                if patterns:  # Nur hinzufügen wenn Patterns gefunden
+                    groups.append(GroupSchema(
+                        group_name=group_name,
+                        patterns=patterns
+                    ))
+        
+        else:
+            # Fall 2: Familie hat KEINE group_names
+            # Analysiere alle Schemas der Familie
+            all_patterns = _analyze_schemas_for_family(cursor, family_id)
+            
+            # Nur anzeigen wenn max 5 einzigartige Schemas
+            if len(all_patterns) <= 5:
+                groups.append(GroupSchema(
+                    group_name=f"Alle Typecodes ({family_code})",
+                    patterns=all_patterns
+                ))
+        
+        return FamilySchemaVisualization(
+            family_code=code,
+            family_label=label,
+            has_group_names=has_group_names,
+            groups=groups
+        )
+    
+    finally:
+        conn.close()
+
+
+def _analyze_schemas_for_group(cursor, family_id: int, group_name: str) -> List[SchemaPattern]:
+    """Analysiert Schema-Muster für eine bestimmte group_name"""
+    
+    # Hole alle Nodes mit full_typecode dieser group_name (nicht nur Leaves!)
+    cursor.execute("""
+        SELECT n.id, n.code, n.full_typecode, n.name
+        FROM nodes n
+        WHERE n.family_id = ?
+          AND n.group_name = ?
+          AND n.full_typecode IS NOT NULL
+        LIMIT 200
+    """, (family_id, group_name))
+    
+    nodes = cursor.fetchall()
+    
+    return _extract_patterns_from_nodes(cursor, family_id, nodes)
+
+
+def _analyze_schemas_for_family(cursor, family_id: int) -> List[SchemaPattern]:
+    """Analysiert Schema-Muster für die gesamte Familie (ohne group_name Filter)"""
+    
+    # Hole alle Nodes mit full_typecode der Familie (nicht nur Leaves!)
+    cursor.execute("""
+        SELECT n.id, n.code, n.full_typecode, n.name
+        FROM nodes n
+        WHERE n.family_id = ?
+          AND n.full_typecode IS NOT NULL
+        LIMIT 200
+    """, (family_id,))
+    
+    nodes = cursor.fetchall()
+    
+    return _extract_patterns_from_nodes(cursor, family_id, nodes)
+
+
+def _extract_patterns_from_nodes(cursor, family_id: int, nodes) -> List[SchemaPattern]:
+    """Extrahiert einzigartige Schema-Muster aus einer Liste von Nodes"""
+    
+    # Sammle Muster
+    pattern_examples = {}  # pattern_string -> (example_code, segments, node_id)
+    pattern_counts = {}  # pattern_string -> count
+    
+    for node_id, code, full_typecode, name in nodes:
+        if not full_typecode:
+            continue
+        
+        # Parse Typcode in Segmente (durch '-' getrennt)
+        segments = full_typecode.split('-')
+        
+        # Erstelle Pattern (Längen der Segmente)
+        pattern = [len(seg) for seg in segments]
+        pattern_string = '-'.join(map(str, pattern))
+        
+        # Zähle und speichere Beispiel
+        pattern_counts[pattern_string] = pattern_counts.get(pattern_string, 0) + 1
+        
+        if pattern_string not in pattern_examples:
+            pattern_examples[pattern_string] = (full_typecode, segments, node_id)
+    
+    # Erstelle SchemaPattern Objekte
+    result = []
+    for pattern_string in sorted(pattern_examples.keys()):
+        example_code, segments, node_id = pattern_examples[pattern_string]
+        pattern = [int(x) for x in pattern_string.split('-')]
+        
+        # Hole Segment-Namen für diesen Typcode
+        segment_names = _get_segment_names(cursor, family_id, node_id, len(segments))
+        
+        result.append(SchemaPattern(
+            pattern=pattern,
+            pattern_string=pattern_string,
+            example_code=example_code,
+            segment_names=segment_names,
+            segment_examples=segments,
+            count=pattern_counts[pattern_string]
+        ))
+    
+    return result
+
+
+def _get_segment_names(cursor, family_id: int, node_id: int, num_segments: int) -> List[Optional[str]]:
+    """
+    Holt die Namen der Code-Segmente für einen bestimmten Node.
+    Folgt dem Pfad von Familie bis zum Node und sammelt die Namen.
+    """
+    
+    # Hole den vollständigen Pfad zu diesem Node
+    cursor.execute("""
+        SELECT n.level, n.name
+        FROM node_closure nc
+        JOIN nodes n ON nc.ancestor = n.id
+        WHERE nc.descendant = ?
+        ORDER BY nc.depth DESC
+    """, (node_id,))
+    
+    path_nodes = cursor.fetchall()
+    
+    # Erstelle Liste der Namen (ohne Familie, Level 0)
+    names = []
+    for level, name in path_nodes:
+        if level > 0:  # Familie überspringen
+            names.append(name if name else None)
+    
+    # Fülle fehlende Namen mit None auf
+    while len(names) < num_segments - 1:  # -1 weil Familie nicht mitzählt
+        names.append(None)
+    
+    # Familie ist immer das erste Segment
+    family_name = "Produktfamilie"
+    return [family_name] + names[:num_segments - 1]
+
+
+# ============================================================
 # Startup
 # ============================================================
 if __name__ == "__main__":

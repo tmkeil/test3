@@ -6676,13 +6676,17 @@ def get_family_schema_visualization(family_code: str):
         if not family:
             raise HTTPException(status_code=404, detail=f"Familie '{family_code}' nicht gefunden")
         
-        family_id, code, label, label_en = family
+        family_id = family['id']
+        code = family['code']
+        label = family['label']
+        label_en = family['label_en']
         
-        # Prüfe ob diese Familie group_names hat
+        # Prüfe ob diese Familie group_names hat (alle Descendants dieser Familie)
         cursor.execute("""
-            SELECT COUNT(DISTINCT group_name)
-            FROM nodes
-            WHERE family_id = ? AND group_name IS NOT NULL
+            SELECT COUNT(DISTINCT n.group_name)
+            FROM nodes n
+            JOIN node_paths p ON p.descendant_id = n.id
+            WHERE p.ancestor_id = ? AND n.group_name IS NOT NULL
         """, (family_id,))
         
         has_group_names = cursor.fetchone()[0] > 0
@@ -6692,10 +6696,11 @@ def get_family_schema_visualization(family_code: str):
         if has_group_names:
             # Fall 1: Familie hat group_names - gruppiere nach group_name
             cursor.execute("""
-                SELECT DISTINCT group_name
-                FROM nodes
-                WHERE family_id = ? AND group_name IS NOT NULL
-                ORDER BY group_name
+                SELECT DISTINCT n.group_name
+                FROM nodes n
+                JOIN node_paths p ON p.descendant_id = n.id
+                WHERE p.ancestor_id = ? AND n.group_name IS NOT NULL
+                ORDER BY n.group_name
             """, (family_id,))
             
             group_names = [row[0] for row in cursor.fetchall()]
@@ -6738,7 +6743,8 @@ def _analyze_schemas_for_group(cursor, family_id: int, group_name: str) -> List[
     cursor.execute("""
         SELECT n.id, n.code, n.full_typecode, n.name
         FROM nodes n
-        WHERE n.family_id = ?
+        JOIN node_paths p ON p.descendant_id = n.id
+        WHERE p.ancestor_id = ?
           AND n.group_name = ?
           AND n.full_typecode IS NOT NULL
         LIMIT 200
@@ -6756,7 +6762,8 @@ def _analyze_schemas_for_family(cursor, family_id: int) -> List[SchemaPattern]:
     cursor.execute("""
         SELECT n.id, n.code, n.full_typecode, n.name
         FROM nodes n
-        WHERE n.family_id = ?
+        JOIN node_paths p ON p.descendant_id = n.id
+        WHERE p.ancestor_id = ?
           AND n.full_typecode IS NOT NULL
         LIMIT 200
     """, (family_id,))
@@ -6820,10 +6827,10 @@ def _get_segment_names(cursor, family_id: int, node_id: int, num_segments: int) 
     # Hole den vollständigen Pfad zu diesem Node
     cursor.execute("""
         SELECT n.level, n.name
-        FROM node_closure nc
-        JOIN nodes n ON nc.ancestor = n.id
-        WHERE nc.descendant = ?
-        ORDER BY nc.depth DESC
+        FROM node_paths p
+        JOIN nodes n ON p.ancestor_id = n.id
+        WHERE p.descendant_id = ?
+        ORDER BY p.depth DESC
     """, (node_id,))
     
     path_nodes = cursor.fetchall()

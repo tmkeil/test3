@@ -1220,12 +1220,19 @@ export async function deleteKMATReference(kmatId: number): Promise<{ success: bo
 // Schema Visualization
 // ============================================================
 
+export interface SubSegmentDefinition {
+  start: number;  // Start position (0-based)
+  end: number;    // End position (exclusive)
+  name: string;   // Name for this character range
+}
+
 export interface SchemaPattern {
   pattern: number[];  // z.B. [3, 5, 3]
   pattern_string: string;  // z.B. "3-5-3"
   example_code: string;  // Beispiel Typcode
   segment_names: (string | null)[];  // Namen der Segmente
   segment_examples: string[];  // Beispielwerte für jedes Segment
+  segment_subsegments: (SubSegmentDefinition[] | null)[];  // Sub-Segmente pro Level
   count: number;  // Wie oft dieses Muster vorkommt
 }
 
@@ -1249,4 +1256,128 @@ export async function getFamilySchemaVisualization(
   familyCode: string
 ): Promise<FamilySchemaVisualization> {
   return fetchApi<FamilySchemaVisualization>(`/family-schema-visualization/${familyCode}`);
+}
+
+// ============================================================
+// Admin: Segment Name Editing
+// ============================================================
+
+export interface SegmentNameUpdateRequest {
+  family_code: string;
+  group_name: string;
+  level: number;
+  new_name: string;
+  pattern_string?: string | null;  // Optional: Only edit nodes matching this pattern
+}
+
+export interface CreateSubSegmentRequest {
+  family_code: string;
+  group_name: string;
+  level: number;
+  pattern_string?: string | null;  // Optional: Only for specific schema pattern
+  subsegments: SubSegmentDefinition[];
+}
+
+export interface SubSegmentResponse {
+  id: number;
+  family_code: string;
+  group_name: string;
+  level: number;
+  pattern_string: string | null;
+  subsegments: SubSegmentDefinition[];
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SegmentNamePreviewResponse {
+  affected_node_ids: number[];
+  affected_count: number;
+  sample_nodes: Array<{
+    id: number;
+    code: string;
+    current_name: string | null;
+    level: number;
+    example_typecode: string | null;
+  }>;
+}
+
+/**
+ * POST /api/admin/segment-name-preview
+ * Preview which nodes will be affected by a segment name update (Admin only)
+ */
+export async function previewSegmentNameUpdate(
+  request: SegmentNameUpdateRequest
+): Promise<SegmentNamePreviewResponse> {
+  return fetchApi<SegmentNamePreviewResponse>('/admin/segment-name-preview', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+}
+
+/**
+ * PUT /api/admin/segment-name
+ * Update segment name for matching nodes (Admin only)
+ */
+export async function updateSegmentName(
+  request: SegmentNameUpdateRequest
+): Promise<{ success: boolean; message: string; updated_count: number; updated_node_ids: number[] }> {
+  return fetchApi<{ success: boolean; message: string; updated_count: number; updated_node_ids: number[] }>(
+    '/admin/segment-name',
+    {
+      method: 'PUT',
+      body: JSON.stringify(request),
+    }
+  );
+}
+
+// ============================================================
+// Admin: Sub-Segment Definitions (Character-Level)
+// ============================================================
+
+/**
+ * GET /api/subsegments/{family_code}/{group_name}/{level}
+ * Get sub-segment definitions for a specific level
+ */
+export async function getSubsegments(
+  familyCode: string,
+  groupName: string,
+  level: number,
+  patternString?: string | null
+): Promise<SubSegmentResponse[]> {
+  const params = patternString ? `?pattern_string=${encodeURIComponent(patternString)}` : '';
+  return fetchApi<SubSegmentResponse[]>(
+    `/subsegments/${familyCode}/${groupName}/${level}${params}`
+  );
+}
+
+/**
+ * POST /api/admin/subsegments
+ * Create or update sub-segment definitions (Admin only)
+ */
+export async function createOrUpdateSubsegments(
+  request: CreateSubSegmentRequest
+): Promise<{ success: boolean; message: string; id: number }> {
+  return fetchApi<{ success: boolean; message: string; id: number }>(
+    '/admin/subsegments',
+    {
+      method: 'POST',
+      body: JSON.stringify(request),
+    }
+  );
+}
+
+/**
+ * DELETE /api/admin/subsegments/{subsegment_id}
+ * Delete sub-segment definition (Admin only)
+ */
+export async function deleteSubsegments(
+  subsegmentId: number
+): Promise<{ success: boolean; message: string }> {
+  return fetchApi<{ success: boolean; message: string }>(
+    `/admin/subsegments/${subsegmentId}`,
+    {
+      method: 'DELETE',
+    }
+  );
 }

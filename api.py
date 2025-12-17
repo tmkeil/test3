@@ -6822,32 +6822,34 @@ def _get_segment_names(cursor, family_id: int, node_id: int, num_segments: int) 
     """
     Holt die Namen der Code-Segmente für einen bestimmten Node.
     Folgt dem Pfad von Familie bis zum Node und sammelt die Namen.
+    Jedes Segment entspricht einem Level (0 = Familie, 1 = erster Code, etc.)
     """
     
-    # Hole den vollständigen Pfad zu diesem Node
+    # Hole den vollständigen Pfad zu diesem Node, sortiert nach Level
     cursor.execute("""
-        SELECT n.level, n.name
+        SELECT n.level, n.name, n.code
         FROM node_paths p
         JOIN nodes n ON p.ancestor_id = n.id
         WHERE p.descendant_id = ?
-        ORDER BY p.depth DESC
+        ORDER BY n.level ASC
     """, (node_id,))
     
     path_nodes = cursor.fetchall()
     
-    # Erstelle Liste der Namen (ohne Familie, Level 0)
+    # Erstelle Dict: level -> name
+    level_names = {}
+    for row in path_nodes:
+        level = row[0]
+        name = row[1]
+        level_names[level] = name if name else None
+    
+    # Baue Liste der Namen für jedes Segment
+    # Segment 0 = Familie (Level 0), Segment 1 = Level 1, etc.
     names = []
-    for level, name in path_nodes:
-        if level > 0:  # Familie überspringen
-            names.append(name if name else None)
+    for i in range(num_segments):
+        names.append(level_names.get(i, None))
     
-    # Fülle fehlende Namen mit None auf
-    while len(names) < num_segments - 1:  # -1 weil Familie nicht mitzählt
-        names.append(None)
-    
-    # Familie ist immer das erste Segment
-    family_name = "Produktfamilie"
-    return [family_name] + names[:num_segments - 1]
+    return names
 
 
 # ============================================================

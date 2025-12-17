@@ -6625,6 +6625,445 @@ def root():
 
 
 # ============================================================
+# Admin: Segment Name Editing
+# ============================================================
+
+class SegmentNameUpdateRequest(BaseModel):
+    """Request to update segment name for all nodes on a level within a group"""
+    family_code: str
+    group_name: str
+    level: int
+    new_name: str
+    pattern_string: Optional[str] = None  # e.g., "3-5-4-2-6" - only edit nodes matching this schema
+
+class SegmentNamePreviewResponse(BaseModel):
+    """Preview of nodes that will be affected by the update"""
+    affected_node_ids: List[int]
+    affected_count: int
+    sample_nodes: List[dict]  # First 10 nodes as examples
+
+def _compute_pattern_string(full_typecode: str) -> str:
+    """
+    Compute pattern string from full typecode.
+    
+    Example: "BCC M313-0000-20" -> "3-4-4-2"
+    """
+    if not full_typecode:
+        return ""
+    
+    # Split by both '-' and ' '
+    parts = full_typecode.split('-')
+    segments = []
+    for part in parts:
+        if ' ' in part:
+            segments.extend([s.strip() for s in part.split() if s.strip()])
+        else:
+            segments.append(part.strip())
+    
+    # Create pattern from lengths
+    pattern = [str(len(s)) for s in segments if s]
+    return '-'.join(pattern)
+
+
+@app.post("/api/admin/segment-name-preview", dependencies=[Depends(require_admin)])
+def preview_segment_name_update(
+    request: SegmentNameUpdateRequest,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Preview which nodes will be affected by a segment name update.
+    
+    Finds all nodes on the specified level with the specified code
+    that have descendants leading to the specified group_name.
+    
+    If pattern_string is provided, only nodes with descendants matching
+    that specific schema pattern will be affected.
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    try:
+        # Get family ID
+        cursor.execute("SELECT id FROM nodes WHERE code = ? AND level = 0", (request.family_code,))
+        family = cursor.fetchone()
+        if not family:
+            raise HTTPException(status_code=404, detail=f"Familie '{request.family_code}' nicht gefunden")
+        
+        family_id = family['id']
+        
+        # Find all nodes that match the criteria
+        cursor.execute("""
+            SELECT DISTINCT n.id, n.code, n.name, n.level, n.full_typecode
+            FROM nodes n
+            JOIN node_paths p ON p.ancestor_id = n.id
+            JOIN nodes descendants ON p.descendant_id = descendants.id
+            WHERE n.level = ?
+              AND descendants.group_name = ?
+              AND descendants.full_typecode IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM node_paths family_path
+                  WHERE family_path.ancestor_id = ?
+                    AND family_path.descendant_id = n.id
+              )
+            ORDER BY n.id
+        """, (request.level, request.group_name, family_id))
+        
+        affected_nodes = cursor.fetchall()
+        
+        # Filter by pattern_string if provided
+        if request.pattern_string:
+            filtered_nodes = []
+            for node in affected_nodes:
+                # Check if any descendant with full_typecode matches the pattern
+                cursor.execute("""
+                    SELECT descendants.full_typecode
+                    FROM node_paths p
+                    JOIN nodes descendants ON p.descendant_id = descendants.id
+                    WHERE p.ancestor_id = ?
+                      AND descendants.group_name = ?
+                      AND descendants.full_typecode IS NOT NULL
+                    LIMIT 1
+                """, (node['id'], request.group_name))
+                
+                descendant = cursor.fetchone()
+                if descendant and descendant['full_typecode']:
+                    computed_pattern = _compute_pattern_string(descendant['full_typecode'])
+                    if computed_pattern == request.pattern_string:
+                        filtered_nodes.append(node)
+            
+            affected_nodes = filtered_nodes
+        
+        # Prepare sample nodes (first 10)
+        sample_nodes = []
+        for row in affected_nodes[:10]:
+            sample_nodes.append({
+                'id': row['id'],
+                'code': row['code'],
+                'current_name': row['name'],
+                'level': row['level'],
+                'example_typecode': row['full_typecode']
+            })
+        
+        return SegmentNamePreviewResponse(
+            affected_node_ids=[row['id'] for row in affected_nodes],
+            affected_count=len(affected_nodes),
+            sample_nodes=sample_nodes
+        )
+    
+    finally:
+        conn.close()
+
+
+@app.put("/api/admin/segment-name", dependencies=[Depends(require_admin)])
+def update_segment_name(
+    request: SegmentNameUpdateRequest,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Update the name attribute for all nodes matching the criteria.
+    
+    Updates all nodes on the specified level with the specified code
+    that have descendants leading to the specified group_name.
+    
+    If pattern_string is provided, only nodes with descendants matching
+    that specific schema pattern will be affected.
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    try:
+        # Get family ID
+        cursor.execute("SELECT id FROM nodes WHERE code = ? AND level = 0", (request.family_code,))
+        family = cursor.fetchone()
+        if not family:
+            raise HTTPException(status_code=404, detail=f"Familie '{request.family_code}' nicht gefunden")
+        
+        family_id = family['id']
+        
+        # Find affected node IDs
+        cursor.execute("""
+            SELECT DISTINCT n.id
+            FROM nodes n
+            JOIN node_paths p ON p.ancestor_id = n.id
+            JOIN nodes descendants ON p.descendant_id = descendants.id
+            WHERE n.level = ?
+              AND descendants.group_name = ?
+              AND descendants.full_typecode IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM node_paths family_path
+                  WHERE family_path.ancestor_id = ?
+                    AND family_path.descendant_id = n.id
+              )
+        """, (request.level, request.group_name, family_id))
+        
+        affected_nodes = cursor.fetchall()
+        
+        # Filter by pattern_string if provided
+        if request.pattern_string:
+            filtered_node_ids = []
+            for node in affected_nodes:
+                # Check if any descendant with full_typecode matches the pattern
+                cursor.execute("""
+                    SELECT descendants.full_typecode
+                    FROM node_paths p
+                    JOIN nodes descendants ON p.descendant_id = descendants.id
+                    WHERE p.ancestor_id = ?
+                      AND descendants.group_name = ?
+                      AND descendants.full_typecode IS NOT NULL
+                    LIMIT 1
+                """, (node['id'], request.group_name))
+                
+                descendant = cursor.fetchone()
+                if descendant and descendant['full_typecode']:
+                    computed_pattern = _compute_pattern_string(descendant['full_typecode'])
+                    if computed_pattern == request.pattern_string:
+                        filtered_node_ids.append(node['id'])
+            
+            affected_node_ids = filtered_node_ids
+        else:
+            affected_node_ids = [row['id'] for row in affected_nodes]
+        
+        if not affected_node_ids:
+            return {
+                "success": True,
+                "message": "Keine Nodes gefunden die geändert werden müssen",
+                "updated_count": 0
+            }
+        
+        # Perform update
+        placeholders = ','.join('?' * len(affected_node_ids))
+        cursor.execute(f"""
+            UPDATE nodes
+            SET name = ?
+            WHERE id IN ({placeholders})
+        """, [request.new_name] + affected_node_ids)
+        
+        updated_count = cursor.rowcount
+        conn.commit()
+        
+        return {
+            "success": True,
+            "message": f"Erfolgreich {updated_count} Node(s) aktualisiert",
+            "updated_count": updated_count,
+            "updated_node_ids": affected_node_ids
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+# ============================================================
+# Admin: Sub-Segment Definitions (Character-Level Editing)
+# ============================================================
+
+class SubSegmentDefinition(BaseModel):
+    """Definition of a character range within a code segment"""
+    start: int  # Start position (0-based)
+    end: int    # End position (exclusive)
+    name: str   # Name for this character range
+
+class CreateSubSegmentRequest(BaseModel):
+    """Request to create/update sub-segment definitions"""
+    family_code: str
+    group_name: str
+    level: int
+    pattern_string: Optional[str] = None  # Optional: Only for specific schema pattern
+    subsegments: List[SubSegmentDefinition]
+
+class SubSegmentResponse(BaseModel):
+    """Response containing sub-segment definitions"""
+    id: int
+    family_code: str
+    group_name: str
+    level: int
+    pattern_string: Optional[str]
+    subsegments: List[SubSegmentDefinition]
+    created_by: Optional[int]
+    created_at: str
+    updated_at: str
+
+
+@app.get("/api/subsegments/{family_code}/{group_name}/{level}")
+def get_subsegments(
+    family_code: str,
+    group_name: str,
+    level: int,
+    pattern_string: Optional[str] = None
+):
+    """
+    Get sub-segment definitions for a specific level within a group.
+    
+    If pattern_string is provided, returns definitions specific to that pattern.
+    If not provided, returns definitions applicable to all patterns (pattern_string=NULL).
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    try:
+        # Query for subsegments
+        if pattern_string:
+            cursor.execute("""
+                SELECT id, family_code, group_name, level, pattern_string, subsegments,
+                       created_by, created_at, updated_at
+                FROM segment_subsegments
+                WHERE family_code = ? AND group_name = ? AND level = ?
+                  AND (pattern_string = ? OR pattern_string IS NULL)
+                ORDER BY pattern_string NULLS LAST
+            """, (family_code, group_name, level, pattern_string))
+        else:
+            cursor.execute("""
+                SELECT id, family_code, group_name, level, pattern_string, subsegments,
+                       created_by, created_at, updated_at
+                FROM segment_subsegments
+                WHERE family_code = ? AND group_name = ? AND level = ?
+                  AND pattern_string IS NULL
+            """, (family_code, group_name, level))
+        
+        rows = cursor.fetchall()
+        
+        if not rows:
+            return []
+        
+        # Parse JSON subsegments
+        results = []
+        for row in rows:
+            subsegments_data = json.loads(row['subsegments'])
+            subsegments = [SubSegmentDefinition(**sub) for sub in subsegments_data]
+            
+            results.append(SubSegmentResponse(
+                id=row['id'],
+                family_code=row['family_code'],
+                group_name=row['group_name'],
+                level=row['level'],
+                pattern_string=row['pattern_string'],
+                subsegments=subsegments,
+                created_by=row['created_by'],
+                created_at=row['created_at'],
+                updated_at=row['updated_at']
+            ))
+        
+        return results
+    
+    finally:
+        conn.close()
+
+
+@app.post("/api/admin/subsegments", dependencies=[Depends(require_admin)])
+def create_or_update_subsegments(
+    request: CreateSubSegmentRequest,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Create or update sub-segment definitions for a level within a group.
+    
+    If a definition already exists for this combination, it will be updated.
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    try:
+        # Validate subsegments
+        if not request.subsegments:
+            raise HTTPException(status_code=400, detail="Mindestens ein Sub-Segment erforderlich")
+        
+        # Check for overlapping ranges
+        for i, sub1 in enumerate(request.subsegments):
+            if sub1.start >= sub1.end:
+                raise HTTPException(status_code=400, detail=f"Sub-Segment {i}: Start muss kleiner als End sein")
+            
+            for j, sub2 in enumerate(request.subsegments):
+                if i < j:  # Only check each pair once
+                    # Check for overlap
+                    if not (sub1.end <= sub2.start or sub2.end <= sub1.start):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Sub-Segmente {i} und {j} überlappen sich"
+                        )
+        
+        # Convert subsegments to JSON
+        subsegments_json = json.dumps([sub.dict() for sub in request.subsegments])
+        
+        # Check if entry exists
+        cursor.execute("""
+            SELECT id FROM segment_subsegments
+            WHERE family_code = ? AND group_name = ? AND level = ?
+              AND (pattern_string = ? OR (pattern_string IS NULL AND ? IS NULL))
+        """, (request.family_code, request.group_name, request.level,
+              request.pattern_string, request.pattern_string))
+        
+        existing = cursor.fetchone()
+        
+        if existing:
+            # Update existing
+            cursor.execute("""
+                UPDATE segment_subsegments
+                SET subsegments = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (subsegments_json, existing['id']))
+            
+            message = f"Sub-Segment-Definition aktualisiert (ID {existing['id']})"
+            subseg_id = existing['id']
+        else:
+            # Insert new
+            cursor.execute("""
+                INSERT INTO segment_subsegments
+                (family_code, group_name, level, pattern_string, subsegments, created_by)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (request.family_code, request.group_name, request.level,
+                  request.pattern_string, subsegments_json, current_user.user_id))
+            
+            subseg_id = cursor.lastrowid
+            message = f"Sub-Segment-Definition erstellt (ID {subseg_id})"
+        
+        conn.commit()
+        
+        return {
+            "success": True,
+            "message": message,
+            "id": subseg_id
+        }
+    
+    finally:
+        conn.close()
+
+
+@app.delete("/api/admin/subsegments/{subsegment_id}", dependencies=[Depends(require_admin)])
+def delete_subsegments(
+    subsegment_id: int,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Delete a sub-segment definition.
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    try:
+        # Check if exists
+        cursor.execute("SELECT id FROM segment_subsegments WHERE id = ?", (subsegment_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Sub-Segment-Definition nicht gefunden")
+        
+        # Delete
+        cursor.execute("DELETE FROM segment_subsegments WHERE id = ?", (subsegment_id,))
+        conn.commit()
+        
+        return {
+            "success": True,
+            "message": f"Sub-Segment-Definition {subsegment_id} gelöscht"
+        }
+    
+    finally:
+        conn.close()
+
+
+# ============================================================
 # Schema Visualization - Typecode Pattern Analysis
 # ============================================================
 
@@ -6635,6 +7074,7 @@ class SchemaPattern(BaseModel):
     example_code: str  # Beispiel Typcode mit diesem Muster
     segment_names: List[Optional[str]]  # Namen der Segmente (wenn vorhanden)
     segment_examples: List[str]  # Beispielwerte für jedes Segment
+    segment_subsegments: List[Optional[List[SubSegmentDefinition]]]  # Sub-Segmente pro Level
     count: int  # Wie oft dieses Muster vorkommt
 
 class GroupSchema(BaseModel):
@@ -6706,7 +7146,7 @@ def get_family_schema_visualization(family_code: str):
             group_names = [row[0] for row in cursor.fetchall()]
             
             for group_name in group_names:
-                patterns = _analyze_schemas_for_group(cursor, family_id, group_name)
+                patterns = _analyze_schemas_for_group(cursor, family_id, code, group_name)
                 if patterns:  # Nur hinzufügen wenn Patterns gefunden
                     groups.append(GroupSchema(
                         group_name=group_name,
@@ -6716,7 +7156,7 @@ def get_family_schema_visualization(family_code: str):
         else:
             # Fall 2: Familie hat KEINE group_names
             # Analysiere alle Schemas der Familie
-            all_patterns = _analyze_schemas_for_family(cursor, family_id)
+            all_patterns = _analyze_schemas_for_family(cursor, family_id, code)
             
             # Nur anzeigen wenn max 5 einzigartige Schemas
             if len(all_patterns) <= 5:
@@ -6736,7 +7176,7 @@ def get_family_schema_visualization(family_code: str):
         conn.close()
 
 
-def _analyze_schemas_for_group(cursor, family_id: int, group_name: str) -> List[SchemaPattern]:
+def _analyze_schemas_for_group(cursor, family_id: int, family_code: str, group_name: str) -> List[SchemaPattern]:
     """Analysiert Schema-Muster für eine bestimmte group_name"""
     
     # Hole alle Nodes mit full_typecode dieser group_name (nicht nur Leaves!)
@@ -6751,10 +7191,10 @@ def _analyze_schemas_for_group(cursor, family_id: int, group_name: str) -> List[
     
     nodes = cursor.fetchall()
     
-    return _extract_patterns_from_nodes(cursor, family_id, nodes)
+    return _extract_patterns_from_nodes(cursor, family_id, nodes, family_code, group_name)
 
 
-def _analyze_schemas_for_family(cursor, family_id: int) -> List[SchemaPattern]:
+def _analyze_schemas_for_family(cursor, family_id: int, family_code: str) -> List[SchemaPattern]:
     """Analysiert Schema-Muster für die gesamte Familie (ohne group_name Filter)"""
     
     # Hole alle Nodes mit full_typecode der Familie (nicht nur Leaves!)
@@ -6768,10 +7208,10 @@ def _analyze_schemas_for_family(cursor, family_id: int) -> List[SchemaPattern]:
     
     nodes = cursor.fetchall()
     
-    return _extract_patterns_from_nodes(cursor, family_id, nodes)
+    return _extract_patterns_from_nodes(cursor, family_id, nodes, family_code)
 
 
-def _extract_patterns_from_nodes(cursor, family_id: int, nodes) -> List[SchemaPattern]:
+def _extract_patterns_from_nodes(cursor, family_id: int, nodes, family_code: str, group_name: Optional[str] = None) -> List[SchemaPattern]:
     """Extrahiert einzigartige Schema-Muster aus einer Liste von Nodes"""
     
     # Sammle Muster
@@ -6814,16 +7254,47 @@ def _extract_patterns_from_nodes(cursor, family_id: int, nodes) -> List[SchemaPa
         # Hole Segment-Namen für diesen Typcode
         segment_names = _get_segment_names(cursor, family_id, node_id, len(segments))
         
+        # Hole Sub-Segmente für jedes Level
+        segment_subsegments = []
+        for level in range(len(segments)):
+            # Query sub-segments for this level
+            subseg_list = _get_subsegments_for_level(
+                cursor, family_code, group_name or "", level, pattern_string
+            )
+            segment_subsegments.append(subseg_list if subseg_list else None)
+        
         result.append(SchemaPattern(
             pattern=pattern,
             pattern_string=pattern_string,
             example_code=example_code,
             segment_names=segment_names,
             segment_examples=segments,
+            segment_subsegments=segment_subsegments,
             count=pattern_counts[pattern_string]
         ))
     
     return result
+
+
+def _get_subsegments_for_level(cursor, family_code: str, group_name: str, level: int, pattern_string: str) -> Optional[List[SubSegmentDefinition]]:
+    """Holt Sub-Segment-Definitionen für ein bestimmtes Level"""
+    cursor.execute("""
+        SELECT subsegments
+        FROM segment_subsegments
+        WHERE family_code = ? AND group_name = ? AND level = ?
+          AND (pattern_string = ? OR pattern_string IS NULL)
+        ORDER BY pattern_string NULLS LAST
+        LIMIT 1
+    """, (family_code, group_name, level, pattern_string))
+    
+    row = cursor.fetchone()
+    if row and row['subsegments']:
+        try:
+            subsegments_data = json.loads(row['subsegments'])
+            return [SubSegmentDefinition(**sub) for sub in subsegments_data]
+        except:
+            return None
+    return None
 
 
 def _get_segment_names(cursor, family_id: int, node_id: int, num_segments: int) -> List[Optional[str]]:

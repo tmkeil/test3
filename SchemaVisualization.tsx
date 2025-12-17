@@ -381,12 +381,14 @@ export const SchemaVisualization: React.FC<SchemaVisualizationProps> = ({ data, 
               </p>
             </div>
           ) : (
-            <div className="flex">
-              {/* Inhaltsverzeichnis - Sidebar */}
+            <div className="flex h-full">
+              {/* Inhaltsverzeichnis - Sidebar (fixiert & scrollbar) */}
               {data.groups.length > 1 && (
-                <div className="w-64 bg-gray-50 border-r border-gray-300 p-4 overflow-y-auto">
-                  <h3 className="text-sm font-semibold text-gray-700 mb-3 uppercase">Gruppen</h3>
-                  <nav className="space-y-1">
+                <div className="w-64 bg-gray-50 border-r border-gray-300 flex flex-col flex-shrink-0">
+                  <div className="p-4 border-b border-gray-300">
+                    <h3 className="text-sm font-semibold text-gray-700 uppercase">Gruppen</h3>
+                  </div>
+                  <nav className="flex-1 overflow-y-auto p-4 space-y-1">
                     {data.groups.map((group, idx) => (
                       <button
                         key={idx}
@@ -404,7 +406,7 @@ export const SchemaVisualization: React.FC<SchemaVisualizationProps> = ({ data, 
               )}
 
               {/* Hauptinhalt */}
-              <div className="flex-1 p-6">
+              <div className="flex-1 overflow-y-auto p-6">
                 {data.has_group_names && (
                   <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
                     <p className="text-sm text-blue-800">

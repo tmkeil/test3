@@ -587,6 +587,10 @@ def main():
         default=1,
         help='Admin user ID for KMAT references created_by field (default: 1)'
     )
+    parser.add_argument(
+        '--subsegments-json',
+        help='Optional: Path to sub-segment definitions JSON file (e.g., subsegments.json)'
+    )
     
     args = parser.parse_args()
     
@@ -642,6 +646,17 @@ def main():
                 db_path=args.db, 
                 json_path=args.kmat_json,
                 admin_user_id=getattr(args, 'kmat_user_id', 1)
+            )
+        
+        # Optional: Import Sub-Segment Definitions
+        if hasattr(args, 'subsegments_json') and args.subsegments_json:
+            print("\n" + "="*60)
+            print("⚡ Importiere Sub-Segment-Definitionen...")
+            print("="*60)
+            from import_subsegments import import_subsegments
+            import_subsegments(
+                db_path=args.db,
+                json_path=args.subsegments_json
             )
         
     except Exception as e:

@@ -6782,8 +6782,18 @@ def _extract_patterns_from_nodes(cursor, family_id: int, nodes) -> List[SchemaPa
         if not full_typecode:
             continue
         
-        # Parse Typcode in Segmente (durch '-' getrennt)
-        segments = full_typecode.split('-')
+        # Parse Typcode in Segmente (durch '-' UND Leerzeichen getrennt)
+        # Zuerst nach '-' splitten
+        parts = full_typecode.split('-')
+        # Dann jedes Teil nochmal nach Leerzeichen splitten und flach machen
+        segments = []
+        for part in parts:
+            part = part.strip()
+            if ' ' in part:
+                # Wenn Leerzeichen enthalten, weiter splitten
+                segments.extend([s.strip() for s in part.split() if s.strip()])
+            else:
+                segments.append(part)
         
         # Erstelle Pattern (Längen der Segmente)
         pattern = [len(seg) for seg in segments]

@@ -169,7 +169,7 @@ const GroupSchemaSection: React.FC<{
 
 export const SchemaVisualization: React.FC<SchemaVisualizationProps> = ({ data, onClose }) => {
   const { user } = useAuth();
-  const isAdmin = user?.is_admin || false;
+  const isAdmin = user?.role === 'admin';
 
   // State für auf-/zugeklappte Gruppen (alle standardmäßig eingeklappt)
   const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
@@ -445,7 +445,7 @@ export const SchemaVisualization: React.FC<SchemaVisualizationProps> = ({ data, 
           </button>
         </div>
       </div>
-
+      
       {/* Edit Modal */}
       {editModal && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-50 p-4">
@@ -805,3 +805,6 @@ const SubSegmentEditor: React.FC<SubSegmentEditorProps> = ({
           </div>
         </div>
       </div>
+    </div>
+  );
+};

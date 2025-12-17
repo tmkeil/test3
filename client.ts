@@ -1215,3 +1215,38 @@ export async function deleteKMATReference(kmatId: number): Promise<{ success: bo
     method: 'DELETE',
   });
 }
+
+// ============================================================
+// Schema Visualization
+// ============================================================
+
+export interface SchemaPattern {
+  pattern: number[];  // z.B. [3, 5, 3]
+  pattern_string: string;  // z.B. "3-5-3"
+  example_code: string;  // Beispiel Typcode
+  segment_names: (string | null)[];  // Namen der Segmente
+  segment_examples: string[];  // Beispielwerte für jedes Segment
+  count: number;  // Wie oft dieses Muster vorkommt
+}
+
+export interface GroupSchema {
+  group_name: string;
+  patterns: SchemaPattern[];
+}
+
+export interface FamilySchemaVisualization {
+  family_code: string;
+  family_label: string | null;
+  has_group_names: boolean;
+  groups: GroupSchema[];
+}
+
+/**
+ * GET /api/family-schema-visualization/{family_code}
+ * Get typecode schema visualization for a family
+ */
+export async function getFamilySchemaVisualization(
+  familyCode: string
+): Promise<FamilySchemaVisualization> {
+  return fetchApi<FamilySchemaVisualization>(`/family-schema-visualization/${familyCode}`);
+}

@@ -6747,7 +6747,6 @@ def _analyze_schemas_for_group(cursor, family_id: int, group_name: str) -> List[
         WHERE p.ancestor_id = ?
           AND n.group_name = ?
           AND n.full_typecode IS NOT NULL
-        LIMIT 200
     """, (family_id, group_name))
     
     nodes = cursor.fetchall()
@@ -6765,7 +6764,6 @@ def _analyze_schemas_for_family(cursor, family_id: int) -> List[SchemaPattern]:
         JOIN node_paths p ON p.descendant_id = n.id
         WHERE p.ancestor_id = ?
           AND n.full_typecode IS NOT NULL
-        LIMIT 200
     """, (family_id,))
     
     nodes = cursor.fetchall()
@@ -6803,8 +6801,8 @@ def _extract_patterns_from_nodes(cursor, family_id: int, nodes) -> List[SchemaPa
         example_code, segments, node_id = pattern_examples[pattern_string]
         pattern = [int(x) for x in pattern_string.split('-')]
         
-        # Hole Segment-Namen für diesen Typcode
-        segment_names = _get_segment_names(cursor, family_id, node_id, len(segments))
+        # Hole Segment-Namen für diesen Typcode (mit den tatsächlichen Segment-Codes)
+        segment_names = _get_segment_names(cursor, family_id, node_id, len(segments), segments)
         
         result.append(SchemaPattern(
             pattern=pattern,
@@ -6818,36 +6816,29 @@ def _extract_patterns_from_nodes(cursor, family_id: int, nodes) -> List[SchemaPa
     return result
 
 
-def _get_segment_names(cursor, family_id: int, node_id: int, num_segments: int) -> List[Optional[str]]:
+def _get_segment_names(cursor, family_id: int, node_id: int, num_segments: int, segments: List[str]) -> List[Optional[str]]:
     """
     Holt die Namen der Code-Segmente für einen bestimmten Node.
-    Folgt dem Pfad von Familie bis zum Node und sammelt die Namen.
-    Jedes Segment entspricht einem Level (0 = Familie, 1 = erster Code, etc.)
+    Matched jedes Segment gegen den tatsächlichen Node im Pfad.
     """
     
-    # Hole den vollständigen Pfad zu diesem Node, sortiert nach Level
-    cursor.execute("""
-        SELECT n.level, n.name, n.code
-        FROM node_paths p
-        JOIN nodes n ON p.ancestor_id = n.id
-        WHERE p.descendant_id = ?
-        ORDER BY n.level ASC
-    """, (node_id,))
-    
-    path_nodes = cursor.fetchall()
-    
-    # Erstelle Dict: level -> name
-    level_names = {}
-    for row in path_nodes:
-        level = row[0]
-        name = row[1]
-        level_names[level] = name if name else None
-    
-    # Baue Liste der Namen für jedes Segment
-    # Segment 0 = Familie (Level 0), Segment 1 = Level 1, etc.
+    # Für jedes Segment: Finde den Node mit diesem Code auf dem entsprechenden Level
     names = []
-    for i in range(num_segments):
-        names.append(level_names.get(i, None))
+    
+    for level_idx, segment_code in enumerate(segments):
+        # Finde den Node im Pfad, der auf diesem Level ist und diesen Code hat
+        cursor.execute("""
+            SELECT n.name
+            FROM node_paths p
+            JOIN nodes n ON p.ancestor_id = n.id
+            WHERE p.descendant_id = ?
+              AND n.level = ?
+              AND n.code = ?
+            LIMIT 1
+        """, (node_id, level_idx, segment_code))
+        
+        row = cursor.fetchone()
+        names.append(row[0] if row and row[0] else None)
     
     return names
 

@@ -6661,7 +6661,7 @@ def get_family_schema_visualization(family_code: str):
     - Wenn Produktfamilie KEINE group_names hat UND max 5 einzigartige Schemas:
       - Zeige alle Schemas der gesamten Familie
     """
-    conn = get_db_connection()
+    conn = get_db()
     cursor = conn.cursor()
     
     try:

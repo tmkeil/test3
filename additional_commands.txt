@@ -1,0 +1,9 @@
+
+python database/export_subsegments.py
+
+
+python database/import_data.py \
+    --json data.json \
+    --recreate \
+    --closure \
+    --subsegments-json subsegments.json

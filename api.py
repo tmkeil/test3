@@ -7549,11 +7549,23 @@ def export_family_to_excel(family_code: str):
         if not groups:
             raise HTTPException(status_code=404, detail="Keine exportierbaren Daten für diese Familie")
         
-        # 3. Create Excel workbook
+        # 3. Analysiere gemeinsame Codes über alle Gruppen hinweg
+        shared_codes_data = _analyze_shared_codes(cursor, family_id, groups)
+        
+        # 4. Create Excel workbook
         wb = Workbook()
         wb.remove(wb.active)  # Remove default sheet
         
-        # 4. Create one sheet per group
+        # 5. Sheet 1: Übersicht (Frontend-ähnlich)
+        overview_ws = wb.create_sheet(title=f"Übersicht {code}")
+        _create_overview_sheet(overview_ws, code, label, groups)
+        
+        # 6. Sheet 2: Gemeinsame Codes (nur wenn viele)
+        if shared_codes_data['total_shared'] > 20:
+            shared_ws = wb.create_sheet(title="Gemeinsame Codes")
+            _create_shared_codes_sheet(shared_ws, shared_codes_data)
+        
+        # 7. Sheets pro Gruppe
         for group in groups:
             group_name = group['group_name']
             
@@ -7561,8 +7573,8 @@ def export_family_to_excel(family_code: str):
             sheet_name = group_name[:31].replace('/', '-').replace('\\', '-').replace(':', '-')
             ws = wb.create_sheet(title=sheet_name)
             
-            # 5. Build data for this group
-            _populate_group_sheet(ws, cursor, family_id, code, group)
+            # Build data for this group (mit Pfad-Kontext und ohne gemeinsame Codes)
+            _populate_group_sheet_v2(ws, cursor, family_id, code, group, shared_codes_data)
         
         # 6. Save to temporary file
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
@@ -7754,6 +7766,438 @@ def _populate_group_sheet(ws, cursor, family_id: int, family_code: str, group: d
                 pass
         adjusted_width = min(max_length + 2, 50)  # Max 50 chars width
         ws.column_dimensions[column_letter].width = adjusted_width
+
+
+def _analyze_shared_codes(cursor, family_id: int, groups: List[dict]) -> dict:
+    """
+    Analysiert welche Codes über mehrere Gruppen hinweg geteilt werden.
+    
+    Ein Code gilt als "geteilt" wenn er in mehreren Gruppen mit:
+    - gleichem code
+    - gleichem name
+    - gleichem label
+    - gleichem label_en
+    vorkommt.
+    
+    Returns: {
+        'total_shared': int,
+        'by_level': {
+            level: {
+                'code_name_label_en_tuple': {
+                    'code': str,
+                    'name': str,
+                    'label': str,
+                    'label_en': str,
+                    'groups': [group_name1, group_name2, ...],
+                    'count': int
+                }
+            }
+        }
+    }
+    """
+    # Sammle alle Codes mit ihren Attributen gruppiert nach Level
+    level_codes = {}  # level -> [(code, name, label, label_en, group_name)]
+    
+    for group in groups:
+        group_name = group['group_name']
+        patterns = group['patterns']
+        
+        for pattern in patterns:
+            if isinstance(pattern, dict):
+                pattern_string = pattern['pattern_string']
+            else:
+                pattern_string = pattern.pattern_string
+            
+            # Hole alle Nodes dieser Gruppe mit diesem Pattern
+            cursor.execute("""
+                SELECT DISTINCT n.id, n.code, n.name, n.level, n.full_typecode
+                FROM nodes n
+                WHERE n.group_name = ?
+                AND n.full_typecode IS NOT NULL
+            """, (group_name,))
+            
+            for row in cursor.fetchall():
+                node_pattern = _compute_pattern_string(row['full_typecode'])
+                if node_pattern != pattern_string:
+                    continue
+                
+                level = row['level']
+                node_id = row['id']
+                code = row['code']
+                name = row['name'] or ''
+                
+                # Hole Labels aus node_labels
+                cursor.execute("""
+                    SELECT label_de, label_en
+                    FROM node_labels
+                    WHERE node_id = ?
+                    ORDER BY display_order
+                """, (node_id,))
+                
+                labels = cursor.fetchall()
+                label_parts = [l['label_de'] for l in labels if l['label_de']]
+                label_en_parts = [l['label_en'] for l in labels if l['label_en']]
+                
+                label = '\n\n'.join(label_parts) if label_parts else ''
+                label_en = '\n\n'.join(label_en_parts) if label_en_parts else ''
+                
+                if level not in level_codes:
+                    level_codes[level] = []
+                
+                level_codes[level].append((code, name, label, label_en, group_name))
+    
+    # Finde gemeinsame Codes
+    shared_by_level = {}
+    total_shared = 0
+    
+    for level, codes_list in level_codes.items():
+        # Gruppiere nach (code, name, label, label_en)
+        from collections import defaultdict
+        code_groups = defaultdict(list)
+        
+        for code, name, label, label_en, group_name in codes_list:
+            key = (code, name, label, label_en)
+            code_groups[key].append(group_name)
+        
+        # Finde die, die in mehreren Gruppen vorkommen
+        shared_by_level[level] = {}
+        for (code, name, label, label_en), group_names in code_groups.items():
+            unique_groups = list(set(group_names))
+            if len(unique_groups) > 1:
+                shared_by_level[level][(code, name, label, label_en)] = {
+                    'code': code,
+                    'name': name,
+                    'label': label,
+                    'label_en': label_en,
+                    'groups': sorted(unique_groups),
+                    'count': len(unique_groups)
+                }
+                total_shared += 1
+    
+    return {
+        'total_shared': total_shared,
+        'by_level': shared_by_level
+    }
+
+
+def _create_overview_sheet(ws, family_code: str, family_label: str, groups: List[dict]):
+    """
+    Erstellt Übersichts-Sheet ähnlich wie Frontend-Modal.
+    Zeigt nur Beispiel-Code pro Schema.
+    """
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    
+    border_thin = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    
+    # Title
+    ws.merge_cells('A1:F1')
+    title_cell = ws['A1']
+    title_cell.value = f"Produktfamilie {family_code}: {family_label or ''}"
+    title_cell.font = Font(bold=True, size=16)
+    title_cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    
+    current_row = 3
+    
+    for group in groups:
+        group_name = group['group_name']
+        patterns = group['patterns']
+        
+        # Group Header
+        ws.merge_cells(f'A{current_row}:F{current_row}')
+        group_cell = ws.cell(row=current_row, column=1, value=f"Gruppe: {group_name}")
+        group_cell.font = Font(bold=True, size=14)
+        group_cell.fill = PatternFill(start_color="D9E2F3", end_color="D9E2F3", fill_type="solid")
+        current_row += 2
+        
+        for idx, pattern in enumerate(patterns):
+            if isinstance(pattern, dict):
+                pattern_string = pattern['pattern_string']
+                segment_examples = pattern['segment_examples']
+                segment_names = pattern['segment_names']
+                count = pattern['count']
+            else:
+                pattern_string = pattern.pattern_string
+                segment_examples = pattern.segment_examples
+                segment_names = pattern.segment_names
+                count = pattern.count
+            
+            # Schema Info
+            ws.cell(row=current_row, column=1, value=f"Schema {idx + 1}:").font = Font(bold=True)
+            ws.cell(row=current_row, column=2, value=f"{pattern_string} ({count} Codes)")
+            current_row += 1
+            
+            # Segment-Visualisierung
+            for seg_idx, segment in enumerate(segment_examples):
+                seg_name = segment_names[seg_idx] if seg_idx < len(segment_names) and segment_names[seg_idx] else f"Level {seg_idx}"
+                ws.cell(row=current_row, column=1, value=segment).font = Font(bold=True, color="0000FF")
+                ws.cell(row=current_row, column=2, value=seg_name)
+                current_row += 1
+            
+            current_row += 1
+        
+        current_row += 2
+
+
+def _create_shared_codes_sheet(ws, shared_data: dict):
+    """
+    Erstellt Sheet mit Codes die über mehrere Gruppen geteilt werden.
+    """
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    
+    border_thin = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    
+    # Title
+    ws.merge_cells('A1:F1')
+    title = ws['A1']
+    title.value = "Gemeinsame Codes (über mehrere Gruppen)"
+    title.font = Font(bold=True, size=14)
+    title.fill = PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid")
+    
+    current_row = 3
+    
+    by_level = shared_data['by_level']
+    
+    for level in sorted(by_level.keys()):
+        codes = by_level[level]
+        
+        if not codes:
+            continue
+        
+        # Level Header
+        ws.cell(row=current_row, column=1, value=f"Level {level}").font = Font(bold=True, size=12)
+        current_row += 1
+        
+        # Table Header
+        headers = ["Code", "Name", "Label (DE)", "Label (EN)", "In Gruppen"]
+        for col_idx, header in enumerate(headers, start=1):
+            cell = ws.cell(row=current_row, column=col_idx, value=header)
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="5B9BD5", end_color="5B9BD5", fill_type="solid")
+            cell.border = border_thin
+        
+        current_row += 1
+        
+        # Data
+        for key, data in sorted(codes.items(), key=lambda x: x[1]['code']):
+            row_data = [
+                data['code'],
+                data['name'],
+                data['label'][:100] + '...' if len(data['label']) > 100 else data['label'],
+                data['label_en'][:100] + '...' if len(data['label_en']) > 100 else data['label_en'],
+                ', '.join(data['groups'])
+            ]
+            
+            for col_idx, value in enumerate(row_data, start=1):
+                cell = ws.cell(row=current_row, column=col_idx, value=value)
+                cell.border = border_thin
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+            
+            current_row += 1
+        
+        current_row += 2
+
+
+def _populate_group_sheet_v2(ws, cursor, family_id: int, family_code: str, group: dict, shared_codes_data: dict):
+    """
+    Neue Version: Nur gruppenspezifische Codes + Pfad-Kontext bei Duplikaten.
+    Zeigt nur Beispiel-Code pro Schema (nicht alle 7000).
+    """
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    
+    group_name = group['group_name']
+    patterns = group['patterns']
+    
+    border_thin = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    
+    # Group Title
+    ws.merge_cells('A1:F1')
+    title = ws['A1']
+    title.value = f"Gruppe: {group_name}"
+    title.font = Font(bold=True, size=14)
+    title.fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+    
+    current_row = 3
+    
+    # Für jedes Schema
+    for pattern_idx, pattern in enumerate(patterns):
+        if isinstance(pattern, dict):
+            pattern_string = pattern['pattern_string']
+            segment_examples = pattern['segment_examples']
+            segment_names = pattern['segment_names']
+            count = pattern['count']
+        else:
+            pattern_string = pattern.pattern_string
+            segment_examples = pattern.segment_examples
+            segment_names = pattern.segment_names
+            count = pattern.count
+        
+        # Schema Header
+        ws.cell(row=current_row, column=1, value=f"Schema {pattern_idx + 1}: {pattern_string} ({count} Codes)").font = Font(bold=True, size=12)
+        current_row += 1
+        
+        # Beispiel-Code Visualisierung (wie Frontend)
+        ws.cell(row=current_row, column=1, value="Beispiel-Code:").font = Font(italic=True)
+        current_row += 1
+        
+        for seg_idx, segment in enumerate(segment_examples):
+            seg_name = segment_names[seg_idx] if seg_idx < len(segment_names) and segment_names[seg_idx] else f"Level {seg_idx}"
+            ws.cell(row=current_row, column=1, value=segment).font = Font(bold=True, color="0000FF", size=11)
+            ws.cell(row=current_row, column=2, value=seg_name)
+            current_row += 1
+        
+        current_row += 2
+        
+        # Code-Varianten pro Level (ohne gemeinsame Codes)
+        current_row = _add_group_specific_codes(
+            ws, cursor, family_id, family_code, group_name, 
+            pattern_string, len(segment_examples), segment_names,
+            shared_codes_data, current_row, border_thin
+        )
+        
+        current_row += 2
+    
+    return current_row
+
+
+def _add_group_specific_codes(
+    ws, cursor, family_id: int, family_code: str, group_name: str,
+    pattern_string: str, num_segments: int, segment_names: List,
+    shared_codes_data: dict, start_row: int, border_thin
+) -> int:
+    """
+    Fügt gruppenspezifische Code-Varianten hinzu (ohne gemeinsame Codes).
+    Mit Pfad-Kontext bei Duplikaten innerhalb der Gruppe.
+    """
+    from openpyxl.styles import Font, PatternFill, Alignment
+    
+    current_row = start_row
+    
+    ws.cell(row=current_row, column=1, value="📋 Code-Varianten (gruppenspezifisch)").font = Font(bold=True, size=11)
+    current_row += 1
+    
+    shared_by_level = shared_codes_data.get('by_level', {})
+    
+    for level in range(num_segments):
+        seg_name = segment_names[level] if level < len(segment_names) and segment_names[level] else f"Level {level}"
+        
+        # Hole alle Codes auf diesem Level
+        cursor.execute("""
+            SELECT DISTINCT n.id, n.code, n.name, n.full_typecode
+            FROM nodes n
+            WHERE n.level = ?
+            AND n.group_name = ?
+            AND n.full_typecode IS NOT NULL
+            ORDER BY n.code
+        """, (level, group_name))
+        
+        nodes = cursor.fetchall()
+        
+        # Filter nach Pattern und dedupliziere
+        codes_dict = {}  # (code, name, label, label_en) -> [paths]
+        
+        for node in nodes:
+            if _compute_pattern_string(node['full_typecode']) != pattern_string:
+                continue
+            
+            node_id = node['id']
+            code = node['code']
+            name = node['name'] or ''
+            
+            # Hole Labels
+            cursor.execute("""
+                SELECT label_de, label_en
+                FROM node_labels
+                WHERE node_id = ?
+                ORDER BY display_order
+            """, (node_id,))
+            
+            labels = cursor.fetchall()
+            label = '\n\n'.join([l['label_de'] for l in labels if l['label_de']])
+            label_en = '\n\n'.join([l['label_en'] for l in labels if l['label_en']])
+            
+            # Prüfe ob gemeinsamer Code (skip wenn ja)
+            if level in shared_by_level:
+                key = (code, name, label, label_en)
+                if key in shared_by_level[level]:
+                    continue  # Wird in "Gemeinsame Codes" Sheet gezeigt
+            
+            # Hole Pfad für Kontext
+            cursor.execute("""
+                SELECT n2.code
+                FROM node_paths p
+                JOIN nodes n2 ON p.ancestor_id = n2.id
+                WHERE p.descendant_id = ?
+                AND p.ancestor_id != p.descendant_id
+                ORDER BY n2.level
+            """, (node_id,))
+            
+            path_codes = [r['code'] for r in cursor.fetchall()]
+            path_str = ' → '.join(path_codes) if path_codes else ''
+            
+            key = (code, name, label, label_en)
+            if key not in codes_dict:
+                codes_dict[key] = []
+            codes_dict[key].append(path_str)
+        
+        if not codes_dict:
+            continue
+        
+        # Level Header
+        current_row += 1
+        ws.cell(row=current_row, column=1, value=f"{seg_name} ({len(codes_dict)} Varianten)").font = Font(bold=True, size=10)
+        current_row += 1
+        
+        # Table Header
+        headers = ["Pfad", "Code", "Name", "Label (DE)", "Label (EN)"]
+        for col_idx, header in enumerate(headers, start=1):
+            cell = ws.cell(row=current_row, column=col_idx, value=header)
+            cell.font = Font(bold=True, size=9, color="FFFFFF")
+            cell.fill = PatternFill(start_color="5B9BD5", end_color="5B9BD5", fill_type="solid")
+            cell.border = border_thin
+        
+        current_row += 1
+        
+        # Data
+        for (code, name, label, label_en), paths in sorted(codes_dict.items(), key=lambda x: x[0][0]):
+            # Bei mehreren Pfaden: mehrere Zeilen
+            for path in sorted(set(paths)):
+                row_data = [
+                    path,
+                    code,
+                    name,
+                    label[:100] + '...' if len(label) > 100 else label,
+                    label_en[:100] + '...' if len(label_en) > 100 else label_en
+                ]
+                
+                for col_idx, value in enumerate(row_data, start=1):
+                    cell = ws.cell(row=current_row, column=col_idx, value=value)
+                    cell.border = border_thin
+                    cell.alignment = Alignment(vertical="top", wrap_text=True)
+                    
+                    # Pfad-Spalte hervorheben
+                    if col_idx == 1 and value:
+                        cell.fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+                        cell.font = Font(size=8, italic=True)
+                
+                current_row += 1
+    
+    return current_row
 
 
 def _split_typecode_segments(full_typecode: str) -> List[str]:

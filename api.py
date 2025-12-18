@@ -18,6 +18,7 @@ if sys.platform == 'win32':
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import sqlite3
 from typing import List, Optional, Dict
@@ -28,6 +29,10 @@ from datetime import datetime, timedelta
 import os
 import json
 from dotenv import load_dotenv
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+import tempfile
 
 # Azure Blob Storage (conditional import - funktioniert lokal ohne Installation)
 try:
@@ -4629,6 +4634,15 @@ def bulk_update_nodes(request: BulkUpdateRequest):
                     query = f"UPDATE nodes SET {', '.join(updates)} WHERE id = ?"
                     cursor.execute(query, params)
                     updated_count += cursor.rowcount
+                    
+                    # Synchronisiere node_labels wenn label geändert wurde
+                    if request.updates.append_label or request.updates.append_label_en:
+                        # Hole die jetzt aktualisierten Werte
+                        updated_node = cursor.execute(
+                            "SELECT label, label_en FROM nodes WHERE id = ?",
+                            (node_id,)
+                        ).fetchone()
+                        _sync_node_labels(cursor, node_id, updated_node['label'], updated_node['label_en'])
         else:
             # DIREKTER SET-Modus: Batch-Update
             update_fields = []
@@ -4671,6 +4685,18 @@ def bulk_update_nodes(request: BulkUpdateRequest):
             
             cursor.execute(query, params)
             updated_count = cursor.rowcount
+            
+            # Synchronisiere node_labels für alle betroffenen Nodes wenn label geändert wurde
+            if request.updates.label is not None or request.updates.label_en is not None:
+                for node_id in request.node_ids:
+                    # Hole die aktuellen label-Werte für diesen Node
+                    node = cursor.execute(
+                        "SELECT label, label_en FROM nodes WHERE id = ?",
+                        (node_id,)
+                    ).fetchone()
+                    
+                    if node:
+                        _sync_node_labels(cursor, node_id, node['label'], node['label_en'])
         
         conn.commit()
         
@@ -4762,6 +4788,20 @@ def update_node(node_id: int, request: UpdateNodeRequest):
         params.append(node_id)
         query = f"UPDATE nodes SET {', '.join(updates)} WHERE id = ?"
         cursor.execute(query, params)
+        
+        # Synchronisiere node_labels wenn label oder label_en geändert wurden
+        if request.label is not None or request.label_en is not None:
+            # Hole aktuelle Labels (um fehlende Werte zu ergänzen)
+            current = cursor.execute(
+                "SELECT label, label_en FROM nodes WHERE id = ?",
+                (node_id,)
+            ).fetchone()
+            
+            final_label_de = request.label if request.label is not None else current['label']
+            final_label_en = request.label_en if request.label_en is not None else current['label_en']
+            
+            _sync_node_labels(cursor, node_id, final_label_de, final_label_en)
+        
         conn.commit()
         
         return UpdateNodeResponse(
@@ -7329,6 +7369,616 @@ def _get_segment_names(cursor, family_id: int, node_id: int, num_segments: int) 
         names.append(level_names.get(i, None))
     
     return names
+
+
+def _sync_node_labels(cursor, node_id: int, label_de: Optional[str], label_en: Optional[str]):
+    """
+    Synchronisiert node_labels Tabelle basierend auf label/label_en Strings.
+    
+    Verwendet den label_parser für vollständiges Parsing inkl. code_segment und Positionen.
+    
+    Format der Labels (im nodes.label/label_en):
+      "Titel: CODE = Beschreibung"  → parst CODE als code_segment
+      "Titel: Beschreibung"         → kein code_segment
+    
+    Alle Spalten werden korrekt gesetzt:
+      - node_id
+      - title
+      - code_segment (falls im Format "CODE = Text")
+      - position_start/position_end (Position im Node-Code)
+      - label_de/label_en
+      - display_order
+    """
+    from label_parser import parse_structured_label
+    
+    # 1. Lösche alte node_labels für diesen Node
+    cursor.execute("DELETE FROM node_labels WHERE node_id = ?", (node_id,))
+    
+    # 2. Parse und erstelle neue node_labels
+    if not label_de and not label_en:
+        return  # Keine Labels vorhanden
+    
+    # Hole Node-Code für Positions-Berechnung
+    node_code = cursor.execute(
+        "SELECT code FROM nodes WHERE id = ?",
+        (node_id,)
+    ).fetchone()
+    full_code = node_code['code'] if node_code else None
+    
+    # Parse beide Labels mit dem label_parser Modul
+    de_parsed = parse_structured_label(label_de, full_code) if label_de else []
+    en_parsed = parse_structured_label(label_en, full_code) if label_en else []
+    
+    # Merge DE und EN Labels by matching code_segment + position
+    # DE ist führend, EN wird hinzugefügt wenn passender Eintrag existiert
+    merged = {}  # key: (code_segment, position_start, position_end, title) -> data
+    
+    for entry in de_parsed:
+        key = (
+            entry.get('code_segment'),
+            entry.get('position_start'),
+            entry.get('position_end'),
+            entry.get('title')
+        )
+        merged[key] = {
+            'title': entry.get('title'),
+            'code_segment': entry.get('code_segment'),
+            'position_start': entry.get('position_start'),
+            'position_end': entry.get('position_end'),
+            'label_de': entry.get('label'),
+            'label_en': None,
+            'display_order': entry.get('display_order', 0)
+        }
+    
+    # Merge EN entries
+    for entry in en_parsed:
+        key = (
+            entry.get('code_segment'),
+            entry.get('position_start'),
+            entry.get('position_end'),
+            entry.get('title')
+        )
+        if key in merged:
+            # Matching entry found - add EN label
+            merged[key]['label_en'] = entry.get('label')
+        else:
+            # No matching DE entry - create new EN-only entry
+            merged[key] = {
+                'title': entry.get('title'),
+                'code_segment': entry.get('code_segment'),
+                'position_start': entry.get('position_start'),
+                'position_end': entry.get('position_end'),
+                'label_de': None,
+                'label_en': entry.get('label'),
+                'display_order': entry.get('display_order', 0)
+            }
+    
+    # Insert all merged entries
+    for data in sorted(merged.values(), key=lambda x: x['display_order']):
+        cursor.execute("""
+            INSERT INTO node_labels 
+            (node_id, title, code_segment, position_start, position_end, 
+             label_de, label_en, display_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            node_id,
+            data['title'],
+            data['code_segment'],
+            data['position_start'],
+            data['position_end'],
+            data['label_de'],
+            data['label_en'],
+            data['display_order']
+        ))
+
+
+# ============================================================
+# Excel Export for Family Schema
+# ============================================================
+
+@app.get("/api/export/family/{family_code}/excel")
+def export_family_to_excel(family_code: str):
+    """
+    Exportiert die vollständige Produktfamilie als Excel-Datei.
+    
+    - Ein Sheet pro Gruppe (group_name)
+    - Spalten: Level 0, Level 1, Level 2, ..., Full Code, Label
+    - Sub-Segmente als zusätzliche Detail-Info
+    - Schemas innerhalb einer Gruppe werden mit Leerzeilen getrennt
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    try:
+        # 1. Get family info
+        cursor.execute("""
+            SELECT id, code, label, label_en
+            FROM nodes
+            WHERE code = ? AND level = 0
+        """, (family_code,))
+        
+        family = cursor.fetchone()
+        if not family:
+            raise HTTPException(status_code=404, detail=f"Familie '{family_code}' nicht gefunden")
+        
+        family_id = family['id']
+        code = family['code']
+        label = family['label']
+        
+        # 2. Check if family has group_names
+        cursor.execute("""
+            SELECT COUNT(DISTINCT n.group_name)
+            FROM nodes n
+            JOIN node_paths p ON p.descendant_id = n.id
+            WHERE p.ancestor_id = ? AND n.group_name IS NOT NULL
+        """, (family_id,))
+        
+        has_group_names = cursor.fetchone()[0] > 0
+        
+        groups = []
+        
+        if has_group_names:
+            # Get all group_names
+            cursor.execute("""
+                SELECT DISTINCT n.group_name
+                FROM nodes n
+                JOIN node_paths p ON p.descendant_id = n.id
+                WHERE p.ancestor_id = ? AND n.group_name IS NOT NULL
+                ORDER BY n.group_name
+            """, (family_id,))
+            
+            group_names = [row[0] for row in cursor.fetchall()]
+            
+            for group_name in group_names:
+                patterns = _analyze_schemas_for_group(cursor, family_id, code, group_name)
+                if patterns:
+                    groups.append({
+                        'group_name': group_name,
+                        'patterns': patterns
+                    })
+        else:
+            # Family has no group_names
+            all_patterns = _analyze_schemas_for_family(cursor, family_id, code)
+            
+            if len(all_patterns) <= 5:
+                groups.append({
+                    'group_name': f"Alle Typecodes ({family_code})",
+                    'patterns': all_patterns
+                })
+        
+        if not groups:
+            raise HTTPException(status_code=404, detail="Keine exportierbaren Daten für diese Familie")
+        
+        # 3. Create Excel workbook
+        wb = Workbook()
+        wb.remove(wb.active)  # Remove default sheet
+        
+        # 4. Create one sheet per group
+        for group in groups:
+            group_name = group['group_name']
+            
+            # Sanitize sheet name (Excel limit: 31 chars, no special chars)
+            sheet_name = group_name[:31].replace('/', '-').replace('\\', '-').replace(':', '-')
+            ws = wb.create_sheet(title=sheet_name)
+            
+            # 5. Build data for this group
+            _populate_group_sheet(ws, cursor, family_id, code, group)
+        
+        # 6. Save to temporary file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
+        wb.save(temp_file.name)
+        temp_file.close()
+        
+        # 7. Return as download
+        filename = f"{family_code}_Export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        
+        return FileResponse(
+            path=temp_file.name,
+            filename=filename,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+        
+    except Exception as e:
+        print(f"❌ Excel Export Fehler: {e}")
+        raise HTTPException(status_code=500, detail=f"Excel Export fehlgeschlagen: {str(e)}")
+    finally:
+        conn.close()
+
+
+def _populate_group_sheet(ws, cursor, family_id: int, family_code: str, group: dict):
+    """
+    Populate one Excel sheet with data for one group.
+    
+    Structure:
+    - Header row with column names
+    - One row per unique full_typecode
+    - Schemas separated by empty rows
+    """
+    
+    group_name = group['group_name']
+    patterns = group['patterns']
+    
+    # Define styles
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    
+    border_thin = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    
+    schema_header_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+    schema_header_font = Font(bold=True, color="000000")
+    
+    current_row = 1
+    
+    # Group title
+    ws.merge_cells(f'A{current_row}:F{current_row}')
+    title_cell = ws.cell(row=current_row, column=1, value=f"Gruppe: {group_name}")
+    title_cell.font = Font(bold=True, size=14)
+    title_cell.fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+    title_cell.alignment = Alignment(horizontal="left", vertical="center")
+    current_row += 2
+    
+    # Process each schema pattern
+    for pattern_idx, pattern in enumerate(patterns):
+        # Handle both dict and SchemaPattern objects
+        if isinstance(pattern, dict):
+            pattern_string = pattern['pattern_string']
+            segment_examples = pattern['segment_examples']
+            segment_names = pattern['segment_names']
+            pattern_count = pattern['count']
+            segment_subsegments = pattern.get('segment_subsegments', [])
+        else:
+            pattern_string = pattern.pattern_string
+            segment_examples = pattern.segment_examples
+            segment_names = pattern.segment_names
+            pattern_count = pattern.count
+            segment_subsegments = pattern.segment_subsegments
+        
+        num_segments = len(segment_examples)
+        
+        # Schema sub-header
+        ws.merge_cells(f'A{current_row}:F{current_row}')
+        schema_cell = ws.cell(
+            row=current_row, 
+            column=1, 
+            value=f"Schema {pattern_idx + 1}: {pattern_string} ({pattern_count} Codes)"
+        )
+        schema_cell.font = schema_header_font
+        schema_cell.fill = schema_header_fill
+        schema_cell.alignment = Alignment(horizontal="left", vertical="center")
+        current_row += 1
+        
+        # Header row
+        headers = []
+        for i in range(num_segments):
+            seg_name = segment_names[i] if i < len(segment_names) and segment_names[i] else f"Level {i}"
+            headers.append(seg_name)
+        headers.extend(["Vollständiger Code", "Label", "Sub-Segmente"])
+        
+        for col_idx, header in enumerate(headers, start=1):
+            cell = ws.cell(row=current_row, column=col_idx, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+            cell.border = border_thin
+        
+        current_row += 1
+        
+        # Get all nodes matching this pattern
+        cursor.execute("""
+            SELECT DISTINCT n.id, n.full_typecode, n.name, n.level
+            FROM nodes n
+            WHERE n.group_name = ?
+            AND n.full_typecode IS NOT NULL
+            ORDER BY n.full_typecode
+        """, (group_name,))
+        
+        nodes = cursor.fetchall()
+        
+        # Filter nodes by pattern
+        matching_nodes = []
+        for node in nodes:
+            node_pattern = _compute_pattern_string(node['full_typecode'])
+            if node_pattern == pattern_string:
+                matching_nodes.append(node)
+        
+        # Write data rows
+        for node in matching_nodes:
+            full_typecode = node['full_typecode']
+            node_label = node['name'] or ""
+            
+            # Split typecode into segments
+            segments = _split_typecode_segments(full_typecode)
+            
+            # Get sub-segments for each level
+            subseg_info = []
+            for seg_idx, segment in enumerate(segments):
+                # Use already loaded sub-segments if available
+                if seg_idx < len(segment_subsegments) and segment_subsegments[seg_idx]:
+                    subsegments_list = segment_subsegments[seg_idx]
+                    subseg_parts = []
+                    for ss in subsegments_list:
+                        # Handle both dict and object
+                        if isinstance(ss, dict):
+                            start, end, name = ss['start'], ss['end'], ss['name']
+                        else:
+                            start, end, name = ss.start, ss.end, ss.name
+                        
+                        chars = segment[start:end]
+                        subseg_parts.append(f"{chars}={name}")
+                    
+                    if subseg_parts:
+                        subseg_info.append(f"L{seg_idx}[{', '.join(subseg_parts)}]")
+            
+            subseg_text = "; ".join(subseg_info) if subseg_info else ""
+            
+            # Write row
+            row_data = segments + [full_typecode, node_label, subseg_text]
+            for col_idx, value in enumerate(row_data, start=1):
+                cell = ws.cell(row=current_row, column=col_idx, value=value)
+                cell.border = border_thin
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+            
+            current_row += 1
+        
+        # Empty row
+        current_row += 1
+        
+        # ===== NEUE SEKTION: Code-Varianten pro Segment mit Labels =====
+        current_row = _add_segment_code_variants_section(
+            ws, cursor, family_id, family_code, group_name, 
+            pattern_string, segment_names, num_segments,
+            current_row, border_thin
+        )
+        
+        # Empty row between schemas
+        current_row += 1
+    
+    # Auto-size columns
+    for col_idx in range(1, ws.max_column + 1):
+        column_letter = get_column_letter(col_idx)
+        max_length = 0
+        for cell in ws[column_letter]:
+            try:
+                if cell.value:
+                    max_length = max(max_length, len(str(cell.value)))
+            except:
+                pass
+        adjusted_width = min(max_length + 2, 50)  # Max 50 chars width
+        ws.column_dimensions[column_letter].width = adjusted_width
+
+
+def _split_typecode_segments(full_typecode: str) -> List[str]:
+    """
+    Split full typecode into segments (by '-' and ' ').
+    
+    Example: "BCC M313-0000-20" -> ["BCC", "M313", "0000", "20"]
+    """
+    if not full_typecode:
+        return []
+    
+    parts = full_typecode.split('-')
+    segments = []
+    for part in parts:
+        if ' ' in part:
+            segments.extend([s.strip() for s in part.split() if s.strip()])
+        else:
+            segments.append(part.strip())
+    
+    return [s for s in segments if s]
+
+
+def _add_segment_code_variants_section(
+    ws, cursor, family_id: int, family_code: str, group_name: str,
+    pattern_string: str, segment_names: List, num_segments: int,
+    start_row: int, border_thin
+) -> int:
+    """
+    Fügt eine Sektion hinzu, die alle Code-Varianten pro Segment auflistet.
+    
+    Für jedes Segment wird eine Sub-Tabelle erstellt mit:
+    - Code (z.B. M213, M214, W213, etc.)
+    - Label (DE)
+    - Label (EN)
+    - Code-Segmente (z.B. M, W, V wenn als code_segment definiert)
+    
+    Returns: next row number
+    """
+    current_row = start_row
+    
+    # Section Header
+    ws.merge_cells(f'A{current_row}:F{current_row}')
+    section_cell = ws.cell(row=current_row, column=1, value="📋 Code-Varianten pro Segment mit Labels")
+    section_cell.font = Font(bold=True, size=12, color="1F4E78")
+    section_cell.fill = PatternFill(start_color="D9E2F3", end_color="D9E2F3", fill_type="solid")
+    section_cell.alignment = Alignment(horizontal="left", vertical="center")
+    current_row += 1
+    
+    # Für jedes Segment
+    for level in range(num_segments):
+        segment_name = segment_names[level] if level < len(segment_names) and segment_names[level] else f"Level {level}"
+        
+        # Hole alle Nodes auf diesem Level in dieser Gruppe mit diesem Pattern
+        cursor.execute("""
+            SELECT DISTINCT 
+                n.id,
+                n.code,
+                n.name,
+                n.full_typecode
+            FROM nodes n
+            WHERE n.level = ?
+            AND n.group_name = ?
+            AND n.full_typecode IS NOT NULL
+            ORDER BY n.code
+        """, (level, group_name))
+        
+        nodes = cursor.fetchall()
+        
+        # Filter nach Pattern
+        matching_nodes = []
+        for node in nodes:
+            node_pattern = _compute_pattern_string(node['full_typecode'])
+            if node_pattern == pattern_string:
+                matching_nodes.append(node)
+        
+        if not matching_nodes:
+            continue
+        
+        # Sub-Header für dieses Segment
+        current_row += 1
+        ws.merge_cells(f'A{current_row}:F{current_row}')
+        segment_header = ws.cell(
+            row=current_row, 
+            column=1, 
+            value=f"Segment {level}: {segment_name} ({len(matching_nodes)} Varianten)"
+        )
+        segment_header.font = Font(bold=True, size=11, color="2E5C8A")
+        segment_header.fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+        current_row += 1
+        
+        # Sammle alle node_labels für Code-Segment-Analyse
+        all_code_segments = {}  # code_segment -> {label_de, label_en, examples}
+        nodes_without_segments = []
+        
+        for node in matching_nodes:
+            node_id = node['id']
+            code = node['code']
+            
+            cursor.execute("""
+                SELECT code_segment, label_de, label_en
+                FROM node_labels
+                WHERE node_id = ?
+                AND code_segment IS NOT NULL
+                ORDER BY display_order
+            """, (node_id,))
+            
+            segments = cursor.fetchall()
+            
+            if segments:
+                # Hat code_segments
+                for seg in segments:
+                    cs = seg['code_segment']
+                    if cs not in all_code_segments:
+                        all_code_segments[cs] = {
+                            'label_de': seg['label_de'],
+                            'label_en': seg['label_en'],
+                            'examples': set()
+                        }
+                    all_code_segments[cs]['examples'].add(code)
+            else:
+                # Keine code_segments
+                nodes_without_segments.append(node)
+        
+        # Entscheide: Zeige Code-Segment-Legende wenn ≥ 50% der Codes segments haben
+        has_segments = len(all_code_segments) > 0
+        segment_coverage = (len(matching_nodes) - len(nodes_without_segments)) / len(matching_nodes) if matching_nodes else 0
+        
+        if has_segments and segment_coverage >= 0.5:
+            # ===== ANSICHT 1: Code-Segment-Legende (reduziert!) =====
+            ws.cell(row=current_row, column=1, value="📖 Code-Segment-Legende (Bedeutungen)").font = Font(bold=True, italic=True, size=10)
+            current_row += 1
+            
+            # Header
+            legend_headers = ["Code-Segment", "Label (DE)", "Label (EN)", "Beispiele"]
+            header_font = Font(bold=True, size=9, color="FFFFFF")
+            header_fill = PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid")
+            
+            for col_idx, header in enumerate(legend_headers, start=1):
+                cell = ws.cell(row=current_row, column=col_idx, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.border = border_thin
+            
+            current_row += 1
+            
+            # Data rows für Code-Segmente
+            for cs in sorted(all_code_segments.keys()):
+                data = all_code_segments[cs]
+                examples = sorted(list(data['examples']))[:5]  # Max 5 Beispiele
+                examples_text = ", ".join(examples)
+                if len(data['examples']) > 5:
+                    examples_text += f" (+ {len(data['examples']) - 5} weitere)"
+                
+                row_data = [cs, data['label_de'] or "", data['label_en'] or "", examples_text]
+                for col_idx, value in enumerate(row_data, start=1):
+                    cell = ws.cell(row=current_row, column=col_idx, value=value)
+                    cell.border = border_thin
+                    cell.alignment = Alignment(vertical="top", wrap_text=True)
+                    if col_idx == 1:  # Code-Segment Spalte hervorheben
+                        cell.fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+                        cell.font = Font(bold=True)
+                
+                current_row += 1
+            
+            current_row += 1
+        
+        # ===== ANSICHT 2: Vollständige Codes (wenn keine Segments ODER als Ergänzung) =====
+        if not has_segments or nodes_without_segments:
+            # Zeige normale Liste nur wenn nötig
+            if not has_segments:
+                ws.cell(row=current_row, column=1, value="📋 Alle Code-Varianten").font = Font(bold=True, italic=True, size=10)
+            else:
+                ws.cell(row=current_row, column=1, value="📋 Codes ohne Code-Segmente").font = Font(bold=True, italic=True, size=10)
+            current_row += 1
+            
+            # Table Header
+            headers = ["Code", "Label (DE)", "Label (EN)"]
+            header_font = Font(bold=True, size=9, color="FFFFFF")
+            header_fill = PatternFill(start_color="5B9BD5", end_color="5B9BD5", fill_type="solid")
+            
+            for col_idx, header in enumerate(headers, start=1):
+                cell = ws.cell(row=current_row, column=col_idx, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.border = border_thin
+            
+            current_row += 1
+            
+            # Data rows
+            nodes_to_show = nodes_without_segments if has_segments else matching_nodes
+            for node in nodes_to_show:
+                node_id = node['id']
+                code = node['code']
+                
+                # Hole Labels (ohne code_segment Filter)
+                cursor.execute("""
+                    SELECT label_de, label_en
+                    FROM node_labels
+                    WHERE node_id = ?
+                    ORDER BY display_order
+                """, (node_id,))
+                
+                labels = cursor.fetchall()
+                
+                label_de_parts = [lbl['label_de'] for lbl in labels if lbl['label_de']]
+                label_en_parts = [lbl['label_en'] for lbl in labels if lbl['label_en']]
+                
+                label_de_text = "; ".join(label_de_parts) if label_de_parts else node['name'] or ""
+                label_en_text = "; ".join(label_en_parts) if label_en_parts else ""
+                
+                # Write row
+                row_data = [code, label_de_text, label_en_text]
+                for col_idx, value in enumerate(row_data, start=1):
+                    cell = ws.cell(row=current_row, column=col_idx, value=value)
+                    cell.border = border_thin
+                    cell.alignment = Alignment(vertical="top", wrap_text=True)
+                
+                current_row += 1
+        
+        # Kleine Lücke zwischen Segmenten
+        current_row += 1
+    
+    return current_row
 
 
 # ============================================================

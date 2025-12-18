@@ -7809,11 +7809,14 @@ def _analyze_shared_codes(cursor, family_id: int, groups: List[dict]) -> dict:
             else:
                 pattern_string = pattern.pattern_string
             
-            # Bestimme Anzahl Segmente
-            num_levels = len(pattern_string.split('-'))
+            # Bestimme Anzahl Segmente und echte Levels
+            num_segments = len(pattern_string.split('-'))
+            # Code-Nodes sind auf geraden Levels: 0, 2, 4, 6, 8...
+            # Pattern-Nodes sind auf ungeraden Levels: 1, 3, 5, 7...
             
-            # Für jedes Level in diesem Pattern
-            for level in range(num_levels):
+            # Für jedes Code-Level in diesem Pattern
+            for segment_idx in range(num_segments):
+                level = segment_idx * 2  # 0, 2, 4, 6...
                 if level not in level_codes:
                     level_codes[level] = set()
                 
@@ -8120,8 +8123,10 @@ def _add_group_specific_codes(
     
     shared_by_level = shared_codes_data.get('by_level', {})
     
-    for level in range(num_segments):
-        seg_name = segment_names[level] if level < len(segment_names) and segment_names[level] else f"Level {level}"
+    # Code-Nodes sind auf geraden Levels: 0, 2, 4, 6...
+    for segment_idx in range(num_segments):
+        level = segment_idx * 2  # Echte Level: 0, 2, 4, 6...
+        seg_name = segment_names[segment_idx] if segment_idx < len(segment_names) and segment_names[segment_idx] else f"Level {level}"
         
         # Hole alle UNIQUE Codes auf diesem Level (dedupliziert nach code+name+labels)
         # Skip pattern nodes (kurze numerische Codes)
@@ -8147,7 +8152,7 @@ def _add_group_specific_codes(
         for unique_code_row in unique_codes:
             code = unique_code_row['code']
             
-            # Hole EINEN Beispiel-Node für diesen Code um Labels zu bekommen
+            # Hole ALLE Nodes mit diesem Code um alle Varianten zu finden
             cursor.execute("""
                 SELECT n.id, n.name, n.full_typecode
                 FROM nodes n
@@ -8155,73 +8160,72 @@ def _add_group_specific_codes(
                 AND n.level = ?
                 AND n.group_name = ?
                 AND n.full_typecode IS NOT NULL
-                LIMIT 1
             """, (code, level, group_name))
             
-            node = cursor.fetchone()
-            if not node:
+            all_nodes = cursor.fetchall()
+            if not all_nodes:
                 continue
             
-            # Pattern-Check
-            if _compute_pattern_string(node['full_typecode']) != pattern_string:
-                continue
+            # Sammle alle einzigartigen (name, label, label_en) Kombinationen für diesen Code
+            code_variants = {}  # (name, label, label_en) -> [node_ids]
             
-            node_id = node['id']
-            name = node['name'] or ''
-            
-            # Hole Labels
-            cursor.execute("""
-                SELECT label_de, label_en
-                FROM node_labels
-                WHERE node_id = ?
-                ORDER BY display_order
-            """, (node_id,))
-            
-            labels = cursor.fetchall()
-            label_de_parts = [l['label_de'] for l in labels if l['label_de']]
-            label_en_parts = [l['label_en'] for l in labels if l['label_en']]
-            label = '\n\n'.join([str(p) for p in label_de_parts]) if label_de_parts else ''
-            label_en = '\n\n'.join([str(p) for p in label_en_parts]) if label_en_parts else ''
-            
-            # Prüfe ob gemeinsamer Code (skip wenn ja)
-            key = (code, name, label, label_en)
-            if level in shared_by_level:
-                if key in shared_by_level[level]:
-                    continue  # Wird in "Gemeinsame Codes" Sheet gezeigt
-            
-            # Hole ALLE Nodes mit diesem Code um verschiedene Pfade zu finden
-            cursor.execute("""
-                SELECT DISTINCT n.id
-                FROM nodes n
-                WHERE n.code = ?
-                AND n.level = ?
-                AND n.group_name = ?
-                AND n.full_typecode IS NOT NULL
-            """, (code, level, group_name))
-            
-            all_node_ids = [r['id'] for r in cursor.fetchall()]
-            
-            # Sammle unique Pfade
-            paths_set = set()
-            for nid in all_node_ids:
-                cursor.execute("""
-                    SELECT n2.code
-                    FROM node_paths p
-                    JOIN nodes n2 ON p.ancestor_id = n2.id
-                    WHERE p.descendant_id = ?
-                    AND p.ancestor_id != p.descendant_id
-                    ORDER BY n2.level
-                """, (nid,))
+            for node in all_nodes:
+                # Pattern-Check
+                if _compute_pattern_string(node['full_typecode']) != pattern_string:
+                    continue
                 
-                path_codes = [r['code'] for r in cursor.fetchall() if r['code']]
-                if path_codes:
-                    path_str = ' → '.join(path_codes)
-                    paths_set.add(path_str)
+                node_id = node['id']
+                name = node['name'] or ''
+                
+                # Hole Labels
+                cursor.execute("""
+                    SELECT label_de, label_en
+                    FROM node_labels
+                    WHERE node_id = ?
+                    ORDER BY display_order
+                """, (node_id,))
+                
+                labels = cursor.fetchall()
+                label_de_parts = [l['label_de'] for l in labels if l['label_de']]
+                label_en_parts = [l['label_en'] for l in labels if l['label_en']]
+                label = '\n\n'.join([str(p) for p in label_de_parts]) if label_de_parts else ''
+                label_en = '\n\n'.join([str(p) for p in label_en_parts]) if label_en_parts else ''
+                
+                variant_key = (name, label, label_en)
+                if variant_key not in code_variants:
+                    code_variants[variant_key] = []
+                code_variants[variant_key].append(node_id)
             
-            if key not in codes_dict:
-                codes_dict[key] = paths_set
-            else:
-                codes_dict[key].update(paths_set)
+            # Für jede einzigartige Variante dieses Codes
+            for (name, label, label_en), node_ids in code_variants.items():
+                key = (code, name, label, label_en)
+                
+                # Prüfe ob gemeinsamer Code (skip wenn ja)
+                if level in shared_by_level:
+                    if key in shared_by_level[level]:
+                        continue  # Wird in "Gemeinsame Codes" Sheet gezeigt
+                
+                # Sammle unique Pfade für diese Variante
+                paths_set = set()
+                for nid in node_ids:
+                    cursor.execute("""
+                        SELECT n2.code
+                        FROM node_paths p
+                        JOIN nodes n2 ON p.ancestor_id = n2.id
+                        WHERE p.descendant_id = ?
+                        AND p.ancestor_id != p.descendant_id
+                        ORDER BY n2.level
+                    """, (nid,))
+                    
+                    path_codes = [r['code'] for r in cursor.fetchall() if r['code']]
+                    if path_codes:
+                        path_str = ' → '.join(path_codes)
+                        paths_set.add(path_str)
+                
+                if key not in codes_dict:
+                    codes_dict[key] = paths_set
+                else:
+                    codes_dict[key].update(paths_set)
         
         if not codes_dict:
             continue

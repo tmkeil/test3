@@ -360,13 +360,25 @@ export const SchemaVisualization: React.FC<SchemaVisualizationProps> = ({ data, 
               {data.family_label && <span className="ml-2">({data.family_label})</span>}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-blue-800 rounded-full transition-colors text-2xl leading-none"
-            aria-label="Schließen"
-          >
-            ✕
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                const url = `http://localhost:8000/api/export/family/${data.family_code}/excel`;
+                window.open(url, '_blank');
+              }}
+              className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded transition-colors text-sm font-medium flex items-center gap-2"
+              title="Als Excel exportieren"
+            >
+              📊 Excel Export
+            </button>
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-blue-800 rounded-full transition-colors text-2xl leading-none"
+              aria-label="Schließen"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         {/* Content */}

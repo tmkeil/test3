@@ -7838,8 +7838,8 @@ def _analyze_shared_codes(cursor, family_id: int, groups: List[dict]) -> dict:
                 label_parts = [l['label_de'] for l in labels if l['label_de']]
                 label_en_parts = [l['label_en'] for l in labels if l['label_en']]
                 
-                label = '\n\n'.join(label_parts) if label_parts else ''
-                label_en = '\n\n'.join(label_en_parts) if label_en_parts else ''
+                label = '\n\n'.join([str(p) for p in label_parts]) if label_parts else ''
+                label_en = '\n\n'.join([str(p) for p in label_en_parts]) if label_en_parts else ''
                 
                 if level not in level_codes:
                     level_codes[level] = []
@@ -8128,8 +8128,10 @@ def _add_group_specific_codes(
             """, (node_id,))
             
             labels = cursor.fetchall()
-            label = '\n\n'.join([l['label_de'] for l in labels if l['label_de']])
-            label_en = '\n\n'.join([l['label_en'] for l in labels if l['label_en']])
+            label_de_parts = [l['label_de'] for l in labels if l['label_de']]
+            label_en_parts = [l['label_en'] for l in labels if l['label_en']]
+            label = '\n\n'.join([str(p) for p in label_de_parts]) if label_de_parts else ''
+            label_en = '\n\n'.join([str(p) for p in label_en_parts]) if label_en_parts else ''
             
             # Prüfe ob gemeinsamer Code (skip wenn ja)
             if level in shared_by_level:
@@ -8147,7 +8149,7 @@ def _add_group_specific_codes(
                 ORDER BY n2.level
             """, (node_id,))
             
-            path_codes = [r['code'] for r in cursor.fetchall()]
+            path_codes = [r['code'] for r in cursor.fetchall() if r['code']]
             path_str = ' → '.join(path_codes) if path_codes else ''
             
             key = (code, name, label, label_en)

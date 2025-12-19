@@ -7560,8 +7560,8 @@ def export_family_to_excel(family_code: str):
         overview_ws = wb.create_sheet(title=f"Übersicht {code}")
         _create_overview_sheet(overview_ws, code, label, groups)
         
-        # 6. Sheet 2: Gemeinsame Codes (nur wenn viele)
-        if shared_codes_data['total_shared'] > 20:
+        # 6. Sheet 2: Gemeinsame Codes (wenn vorhanden)
+        if shared_codes_data['total_shared'] > 0:
             shared_ws = wb.create_sheet(title="Gemeinsame Codes")
             _create_shared_codes_sheet(shared_ws, shared_codes_data)
         
@@ -7809,31 +7809,28 @@ def _analyze_shared_codes(cursor, family_id: int, groups: List[dict]) -> dict:
             else:
                 pattern_string = pattern.pattern_string
             
-            # Bestimme Anzahl Segmente und echte Levels
+            # Bestimme Anzahl Segmente
             num_segments = len(pattern_string.split('-'))
-            # Code-Nodes sind auf geraden Levels: 0, 2, 4, 6, 8...
-            # Pattern-Nodes sind auf ungeraden Levels: 1, 3, 5, 7...
             
-            # Für jedes Code-Level in diesem Pattern
-            for segment_idx in range(num_segments):
-                level = segment_idx * 2  # 0, 2, 4, 6...
+            # Für jedes Level (1, 2, 3..., nicht Level 0 = Produktfamilie)
+            for level in range(1, num_segments):
                 if level not in level_codes:
                     level_codes[level] = set()
                 
-                # Hole UNIQUE Codes auf diesem Level (skip pattern nodes)
+                # Hole UNIQUE Codes auf diesem Level
                 cursor.execute("""
-                    SELECT DISTINCT n.code, n.level
+                    SELECT DISTINCT n.code
                     FROM nodes n
                     WHERE n.group_name = ?
                     AND n.level = ?
+                    AND n.code IS NOT NULL
                     AND n.full_typecode IS NOT NULL
-                    AND LENGTH(n.code) > 2
                 """, (group_name, level))
                 
                 unique_codes = cursor.fetchall()
                 
-                for unique_row in unique_codes:
-                    code = unique_row['code']
+                for row in unique_codes:
+                    code = row['code']
                     
                     # Hole EINEN Beispiel-Node für diesen Code
                     cursor.execute("""
@@ -8113,6 +8110,8 @@ def _add_group_specific_codes(
     """
     Fügt gruppenspezifische Code-Varianten hinzu (ohne gemeinsame Codes).
     Mit Pfad-Kontext bei Duplikaten innerhalb der Gruppe.
+    
+    WICHTIG: Dedupliziert nach (code, name, label, label_en) bevor Export!
     """
     from openpyxl.styles import Font, PatternFill, Alignment
     
@@ -8123,109 +8122,75 @@ def _add_group_specific_codes(
     
     shared_by_level = shared_codes_data.get('by_level', {})
     
-    # Code-Nodes sind auf geraden Levels: 0, 2, 4, 6...
-    for segment_idx in range(num_segments):
-        level = segment_idx * 2  # Echte Level: 0, 2, 4, 6...
-        seg_name = segment_names[segment_idx] if segment_idx < len(segment_names) and segment_names[segment_idx] else f"Level {level}"
+    # Für jedes Level (1, 2, 3..., nicht Level 0 = Produktfamilie)
+    for level in range(1, num_segments):
+        seg_name = segment_names[level] if level < len(segment_names) and segment_names[level] else f"Level {level}"
         
-        # Hole alle UNIQUE Codes auf diesem Level (dedupliziert nach code+name+labels)
-        # Skip pattern nodes (kurze numerische Codes)
+        # SCHRITT 1: Hole ALLE Nodes auf diesem Level für diese Gruppe mit diesem Pattern
         cursor.execute("""
-            SELECT n.code, n.name, n.level, n.group_name
+            SELECT n.id, n.code, n.name, n.full_typecode
             FROM nodes n
             WHERE n.level = ?
             AND n.group_name = ?
+            AND n.code IS NOT NULL
             AND n.full_typecode IS NOT NULL
-            AND LENGTH(n.code) > 2
-            GROUP BY n.code
-            ORDER BY n.code
         """, (level, group_name))
         
-        unique_codes = cursor.fetchall()
-        
-        if not unique_codes:
+        all_nodes = cursor.fetchall()
+        if not all_nodes:
             continue
         
-        # Dedupliziere und sammle Attribute
+        # SCHRITT 2: Filter nach Pattern + Sammle Labels + Dedupliziere
         codes_dict = {}  # (code, name, label, label_en) -> set(paths)
         
-        for unique_code_row in unique_codes:
-            code = unique_code_row['code']
-            
-            # Hole ALLE Nodes mit diesem Code um alle Varianten zu finden
-            cursor.execute("""
-                SELECT n.id, n.name, n.full_typecode
-                FROM nodes n
-                WHERE n.code = ?
-                AND n.level = ?
-                AND n.group_name = ?
-                AND n.full_typecode IS NOT NULL
-            """, (code, level, group_name))
-            
-            all_nodes = cursor.fetchall()
-            if not all_nodes:
+        for node in all_nodes:
+            # Pattern-Check
+            if _compute_pattern_string(node['full_typecode']) != pattern_string:
                 continue
             
-            # Sammle alle einzigartigen (name, label, label_en) Kombinationen für diesen Code
-            code_variants = {}  # (name, label, label_en) -> [node_ids]
+            node_id = node['id']
+            code = node['code']
+            name = node['name'] or ''
             
-            for node in all_nodes:
-                # Pattern-Check
-                if _compute_pattern_string(node['full_typecode']) != pattern_string:
-                    continue
-                
-                node_id = node['id']
-                name = node['name'] or ''
-                
-                # Hole Labels
-                cursor.execute("""
-                    SELECT label_de, label_en
-                    FROM node_labels
-                    WHERE node_id = ?
-                    ORDER BY display_order
-                """, (node_id,))
-                
-                labels = cursor.fetchall()
-                label_de_parts = [l['label_de'] for l in labels if l['label_de']]
-                label_en_parts = [l['label_en'] for l in labels if l['label_en']]
-                label = '\n\n'.join([str(p) for p in label_de_parts]) if label_de_parts else ''
-                label_en = '\n\n'.join([str(p) for p in label_en_parts]) if label_en_parts else ''
-                
-                variant_key = (name, label, label_en)
-                if variant_key not in code_variants:
-                    code_variants[variant_key] = []
-                code_variants[variant_key].append(node_id)
+            # Hole Labels
+            cursor.execute("""
+                SELECT label_de, label_en
+                FROM node_labels
+                WHERE node_id = ?
+                ORDER BY display_order
+            """, (node_id,))
             
-            # Für jede einzigartige Variante dieses Codes
-            for (name, label, label_en), node_ids in code_variants.items():
-                key = (code, name, label, label_en)
-                
-                # Prüfe ob gemeinsamer Code (skip wenn ja)
-                if level in shared_by_level:
-                    if key in shared_by_level[level]:
-                        continue  # Wird in "Gemeinsame Codes" Sheet gezeigt
-                
-                # Sammle unique Pfade für diese Variante
-                paths_set = set()
-                for nid in node_ids:
-                    cursor.execute("""
-                        SELECT n2.code
-                        FROM node_paths p
-                        JOIN nodes n2 ON p.ancestor_id = n2.id
-                        WHERE p.descendant_id = ?
-                        AND p.ancestor_id != p.descendant_id
-                        ORDER BY n2.level
-                    """, (nid,))
-                    
-                    path_codes = [r['code'] for r in cursor.fetchall() if r['code']]
-                    if path_codes:
-                        path_str = ' → '.join(path_codes)
-                        paths_set.add(path_str)
-                
-                if key not in codes_dict:
-                    codes_dict[key] = paths_set
-                else:
-                    codes_dict[key].update(paths_set)
+            labels = cursor.fetchall()
+            label_de_parts = [l['label_de'] for l in labels if l['label_de']]
+            label_en_parts = [l['label_en'] for l in labels if l['label_en']]
+            label = '\n\n'.join([str(p) for p in label_de_parts]) if label_de_parts else ''
+            label_en = '\n\n'.join([str(p) for p in label_en_parts]) if label_en_parts else ''
+            
+            # Deduplizierungs-Key
+            key = (code, name, label, label_en)
+            
+            # Skip wenn gemeinsamer Code
+            if level in shared_by_level and key in shared_by_level[level]:
+                continue
+            
+            # Hole Pfad für diesen Node
+            cursor.execute("""
+                SELECT n2.code
+                FROM node_paths p
+                JOIN nodes n2 ON p.ancestor_id = n2.id
+                WHERE p.descendant_id = ?
+                AND p.ancestor_id != p.descendant_id
+                ORDER BY n2.level
+            """, (node_id,))
+            
+            path_codes = [r['code'] for r in cursor.fetchall() if r['code']]
+            path_str = ' → '.join(path_codes) if path_codes else ''
+            
+            # Sammle in Set (automatische Deduplizierung gleicher Pfade)
+            if key not in codes_dict:
+                codes_dict[key] = set()
+            if path_str:  # Nur hinzufügen wenn Pfad vorhanden
+                codes_dict[key].add(path_str)
         
         if not codes_dict:
             continue
@@ -8245,26 +8210,11 @@ def _add_group_specific_codes(
         
         current_row += 1
         
-        # Data
+        # SCHRITT 3: Export (nach Code sortiert)
         for (code, name, label, label_en), paths in sorted(codes_dict.items(), key=lambda x: x[0][0]):
-            # Bei mehreren Pfaden: mehrere Zeilen
-            if len(paths) == 0:
-                # Keine Pfade, zeige trotzdem den Code
-                row_data = [
-                    '',
-                    code,
-                    name,
-                    label[:100] + '...' if len(label) > 100 else label,
-                    label_en[:100] + '...' if len(label_en) > 100 else label_en
-                ]
-                
-                for col_idx, value in enumerate(row_data, start=1):
-                    cell = ws.cell(row=current_row, column=col_idx, value=value)
-                    cell.border = border_thin
-                    cell.alignment = Alignment(vertical="top", wrap_text=True)
-                
-                current_row += 1
-            else:
+            # Pfad-Kontext NUR wenn mehrere Pfade (= Duplikate)
+            if len(paths) > 1:
+                # Duplikat! Zeige alle Pfade
                 for path in sorted(paths):
                     row_data = [
                         path,
@@ -8280,11 +8230,27 @@ def _add_group_specific_codes(
                         cell.alignment = Alignment(vertical="top", wrap_text=True)
                         
                         # Pfad-Spalte hervorheben
-                        if col_idx == 1 and value:
+                        if col_idx == 1:
                             cell.fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
                             cell.font = Font(size=8, italic=True)
                     
                     current_row += 1
+            else:
+                # Einzigartig, kein Pfad
+                row_data = [
+                    '',  # Leerer Pfad
+                    code,
+                    name,
+                    label[:100] + '...' if len(label) > 100 else label,
+                    label_en[:100] + '...' if len(label_en) > 100 else label_en
+                ]
+                
+                for col_idx, value in enumerate(row_data, start=1):
+                    cell = ws.cell(row=current_row, column=col_idx, value=value)
+                    cell.border = border_thin
+                    cell.alignment = Alignment(vertical="top", wrap_text=True)
+                
+                current_row += 1
     
     return current_row
 

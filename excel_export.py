@@ -112,11 +112,6 @@ def _analyze_shared_codes(cursor, family_id: int, groups: List[dict]) -> dict:
                     if not node:
                         continue
                     
-                    # Pattern check - muss zum aktuellen Schema passen
-                    node_pattern = _compute_pattern_string(node['full_typecode'])
-                    if node_pattern != pstring:
-                        continue
-                    
                     # Get labels
                     cursor.execute("""
                         SELECT label_de, label_en
@@ -339,11 +334,6 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
             codes_dict = {}  # (code, name, label, label_en) -> set(paths)
             
             for node in all_nodes:
-                # Pattern check - muss zum aktuellen Schema passen
-                node_pattern = _compute_pattern_string(node['full_typecode'])
-                if node_pattern != pstring:
-                    continue
-                
                 code = node['code']
                 name = node['name'] or ''
                 node_id = node['id']

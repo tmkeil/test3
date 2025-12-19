@@ -80,32 +80,41 @@ def _analyze_shared_codes(cursor, family_id: int, groups: List[dict]) -> dict:
             
             # Für Level 1, 2, 3... (nicht Level 0 = Familie)
             for level in range(1, num_segs):
-                # Hole DISTINCT Codes
+                # Hole DISTINCT Codes die zur Familie gehören
                 cursor.execute("""
                     SELECT DISTINCT n.code
                     FROM nodes n
-                    WHERE n.group_name = ? AND n.level = ?
-                    AND n.code IS NOT NULL AND n.full_typecode IS NOT NULL
-                """, (gname, level))
+                    JOIN node_paths p ON p.descendant_id = n.id
+                    WHERE p.ancestor_id = ?
+                    AND n.group_name = ? 
+                    AND n.level = ?
+                    AND n.code IS NOT NULL 
+                    AND n.full_typecode IS NOT NULL
+                """, (family_id, gname, level))
                 
                 for row in cursor.fetchall():
                     code = row['code']
                     
                     # Hole EINEN Beispiel-Node für Attribute
                     cursor.execute("""
-                        SELECT id, name, full_typecode
-                        FROM nodes
-                        WHERE code = ? AND level = ? AND group_name = ?
-                        AND full_typecode IS NOT NULL
+                        SELECT n.id, n.name, n.full_typecode
+                        FROM nodes n
+                        JOIN node_paths p ON p.descendant_id = n.id
+                        WHERE p.ancestor_id = ?
+                        AND n.code = ? 
+                        AND n.level = ? 
+                        AND n.group_name = ?
+                        AND n.full_typecode IS NOT NULL
                         LIMIT 1
-                    """, (code, level, gname))
+                    """, (family_id, code, level, gname))
                     
                     node = cursor.fetchone()
                     if not node:
                         continue
                     
-                    # Pattern check
-                    if _compute_pattern_string(node['full_typecode']) != pstring:
+                    # Pattern check - muss zum aktuellen Schema passen
+                    node_pattern = _compute_pattern_string(node['full_typecode'])
+                    if node_pattern != pstring:
                         continue
                     
                     # Get labels
@@ -310,13 +319,17 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
         for level in range(1, num_segs):
             level_name = seg_names[level] if level < len(seg_names) and seg_names[level] else f"Level {level}"
             
-            # Hole ALLE Nodes auf diesem Level
+            # Hole ALLE Nodes auf diesem Level, die zur Familie gehören und zum Pattern passen
             cursor.execute("""
-                SELECT n.id, n.code, n.name, n.full_typecode
+                SELECT DISTINCT n.id, n.code, n.name, n.full_typecode
                 FROM nodes n
-                WHERE n.level = ? AND n.group_name = ?
-                AND n.code IS NOT NULL AND n.full_typecode IS NOT NULL
-            """, (level, gname))
+                JOIN node_paths p ON p.descendant_id = n.id
+                WHERE p.ancestor_id = ?
+                AND n.level = ? 
+                AND n.group_name = ?
+                AND n.code IS NOT NULL 
+                AND n.full_typecode IS NOT NULL
+            """, (family_id, level, gname))
             
             all_nodes = cursor.fetchall()
             if not all_nodes:
@@ -326,8 +339,9 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
             codes_dict = {}  # (code, name, label, label_en) -> set(paths)
             
             for node in all_nodes:
-                # Pattern check
-                if _compute_pattern_string(node['full_typecode']) != pstring:
+                # Pattern check - muss zum aktuellen Schema passen
+                node_pattern = _compute_pattern_string(node['full_typecode'])
+                if node_pattern != pstring:
                     continue
                 
                 code = node['code']

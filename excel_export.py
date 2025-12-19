@@ -293,28 +293,24 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
     ws.cell(row=current_row, column=1, value=f"Gruppe: {gname}").font = Font(bold=True, size=14)
     current_row += 2
     
-    # Pro Schema
+    # Finde max Level über alle Patterns
+    max_level = 0
     for pattern in patterns:
-        if isinstance(pattern, dict):
-            pstring = pattern['pattern_string']
-            seg_names = pattern['segment_names']
-            count = pattern['count']
-        else:
-            pstring = pattern.pattern_string
-            seg_names = pattern.segment_names
-            count = pattern.count
-        
+        pstring = pattern['pattern_string'] if isinstance(pattern, dict) else pattern.pattern_string
         num_segs = len(pstring.split('-'))
+        max_level = max(max_level, num_segs - 1)
+    
+    # WICHTIG: Für JEDES Level (1, 2, 3...) EINE Tabelle (nicht pro Pattern!)
+    for level in range(1, max_level + 1):
+        # Level Name aus einem der Patterns holen
+        level_name = f"Level {level}"
+        for pattern in patterns:
+            seg_names = pattern['segment_names'] if isinstance(pattern, dict) else pattern.segment_names
+            if level < len(seg_names) and seg_names[level]:
+                level_name = seg_names[level]
+                break
         
-        # Schema Header
-        ws.cell(row=current_row, column=1, value=f"Schema: {pstring} ({count} Codes)").font = Font(bold=True, size=11)
-        current_row += 2
-        
-        # WICHTIG: Für JEDES Level (1, 2, 3...) eine Tabelle
-        for level in range(1, num_segs):
-            level_name = seg_names[level] if level < len(seg_names) and seg_names[level] else f"Level {level}"
-            
-            # Hole ALLE Nodes auf diesem Level, die zur Familie gehören und zum Pattern passen
+        # Hole ALLE Nodes auf diesem Level, die zur Familie gehören
             cursor.execute("""
                 SELECT DISTINCT n.id, n.code, n.name, n.full_typecode
                 FROM nodes n
@@ -372,46 +368,30 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
                     codes_dict[key] = set()
                 if path_str:
                     codes_dict[key].add(path_str)
-            
-            if not codes_dict:
-                continue
-            
-            # Level Header
-            ws.cell(row=current_row, column=1, value=f"{level_name} ({len(codes_dict)} Varianten)").font = Font(bold=True, size=10)
-            current_row += 1
-            
-            # Table Header
-            headers = ["Pfad", "Code", "Name", "Label (DE)", "Label (EN)"]
-            for col, h in enumerate(headers, 1):
-                cell = ws.cell(row=current_row, column=col, value=h)
-                cell.font = Font(bold=True, color="FFFFFF")
-                cell.fill = PatternFill(start_color="5B9BD5", end_color="5B9BD5", fill_type="solid")
-                cell.border = border
-            current_row += 1
-            
-            # Data
-            for (code, name, label_de, label_en), paths in sorted(codes_dict.items(), key=lambda x: x[0][0]):
+        
+        if not codes_dict:
+            continue
+        
+        # Level Header
+        ws.cell(row=current_row, column=1, value=f"{level_name} ({len(codes_dict)} Varianten)").font = Font(bold=True, size=10)
+        current_row += 1
+        
+        # Table Header
+        headers = ["Pfad", "Code", "Name", "Label (DE)", "Label (EN)"]
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=current_row, column=col, value=h)
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="5B9BD5", end_color="5B9BD5", fill_type="solid")
+            cell.border = border
+        current_row += 1
+        
+        # Data
+        for (code, name, label_de, label_en), paths in sorted(codes_dict.items(), key=lambda x: x[0][0]):
                 # Pfad NUR wenn mehrere (= Duplikate)
-                if len(paths) > 1:
-                    for path in sorted(paths):
-                        row_data = [
-                            path, code, name,
-                            label_de[:100] + '...' if len(label_de) > 100 else label_de,
-                            label_en[:100] + '...' if len(label_en) > 100 else label_en
-                        ]
-                        
-                        for col, val in enumerate(row_data, 1):
-                            cell = ws.cell(row=current_row, column=col, value=val)
-                            cell.border = border
-                            cell.alignment = Alignment(vertical="top", wrap_text=True)
-                            if col == 1:  # Pfad highlight
-                                cell.fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
-                                cell.font = Font(size=8, italic=True)
-                        current_row += 1
-                else:
-                    # Kein Pfad (einzigartig)
+            if len(paths) > 1:
+                for path in sorted(paths):
                     row_data = [
-                        '', code, name,
+                        path, code, name,
                         label_de[:100] + '...' if len(label_de) > 100 else label_de,
                         label_en[:100] + '...' if len(label_en) > 100 else label_en
                     ]
@@ -420,11 +400,25 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
                         cell = ws.cell(row=current_row, column=col, value=val)
                         cell.border = border
                         cell.alignment = Alignment(vertical="top", wrap_text=True)
+                        if col == 1:  # Pfad highlight
+                            cell.fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+                            cell.font = Font(size=8, italic=True)
                     current_row += 1
-            
-            current_row += 2  # Gap between levels
+            else:
+                # Kein Pfad (einzigartig)
+                row_data = [
+                    '', code, name,
+                    label_de[:100] + '...' if len(label_de) > 100 else label_de,
+                    label_en[:100] + '...' if len(label_en) > 100 else label_en
+                ]
+                
+                for col, val in enumerate(row_data, 1):
+                    cell = ws.cell(row=current_row, column=col, value=val)
+                    cell.border = border
+                    cell.alignment = Alignment(vertical="top", wrap_text=True)
+                current_row += 1
         
-        current_row += 1  # Gap between schemas
+        current_row += 2  # Gap between levels
 
 
 # ============================================================

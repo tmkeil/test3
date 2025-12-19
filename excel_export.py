@@ -311,63 +311,63 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
                 break
         
         # Hole ALLE Nodes auf diesem Level, die zur Familie gehören
-            cursor.execute("""
-                SELECT DISTINCT n.id, n.code, n.name, n.full_typecode
-                FROM nodes n
-                JOIN node_paths p ON p.descendant_id = n.id
-                WHERE p.ancestor_id = ?
-                AND n.level = ? 
-                AND n.group_name = ?
-                AND n.code IS NOT NULL 
-                AND n.full_typecode IS NOT NULL
-            """, (family_id, level, gname))
+        cursor.execute("""
+            SELECT DISTINCT n.id, n.code, n.name, n.full_typecode
+            FROM nodes n
+            JOIN node_paths p ON p.descendant_id = n.id
+            WHERE p.ancestor_id = ?
+            AND n.level = ? 
+            AND n.group_name = ?
+            AND n.code IS NOT NULL 
+            AND n.full_typecode IS NOT NULL
+        """, (family_id, level, gname))
+        
+        all_nodes = cursor.fetchall()
+        if not all_nodes:
+            continue
+        
+        # Dedupliziere nach (code, name, label, label_en)
+        codes_dict = {}  # (code, name, label, label_en) -> set(paths)
+        
+        for node in all_nodes:
+            code = node['code']
+            name = node['name'] or ''
+            node_id = node['id']
             
-            all_nodes = cursor.fetchall()
-            if not all_nodes:
+            # Get labels
+            cursor.execute("""
+                SELECT label_de, label_en
+                FROM node_labels
+                WHERE node_id = ?
+                ORDER BY display_order
+            """, (node_id,))
+            
+            labels = cursor.fetchall()
+            label_de = '\n\n'.join([l['label_de'] for l in labels if l['label_de']])
+            label_en = '\n\n'.join([l['label_en'] for l in labels if l['label_en']])
+            
+            key = (code, name, label_de, label_en)
+            
+            # Skip if shared
+            if level in shared_codes['by_level'] and key in shared_codes['by_level'][level]:
                 continue
             
-            # Dedupliziere nach (code, name, label, label_en)
-            codes_dict = {}  # (code, name, label, label_en) -> set(paths)
+            # Get path
+            cursor.execute("""
+                SELECT n2.code
+                FROM node_paths p
+                JOIN nodes n2 ON p.ancestor_id = n2.id
+                WHERE p.descendant_id = ? AND p.ancestor_id != p.descendant_id
+                ORDER BY n2.level
+            """, (node_id,))
             
-            for node in all_nodes:
-                code = node['code']
-                name = node['name'] or ''
-                node_id = node['id']
-                
-                # Get labels
-                cursor.execute("""
-                    SELECT label_de, label_en
-                    FROM node_labels
-                    WHERE node_id = ?
-                    ORDER BY display_order
-                """, (node_id,))
-                
-                labels = cursor.fetchall()
-                label_de = '\n\n'.join([l['label_de'] for l in labels if l['label_de']])
-                label_en = '\n\n'.join([l['label_en'] for l in labels if l['label_en']])
-                
-                key = (code, name, label_de, label_en)
-                
-                # Skip if shared
-                if level in shared_codes['by_level'] and key in shared_codes['by_level'][level]:
-                    continue
-                
-                # Get path
-                cursor.execute("""
-                    SELECT n2.code
-                    FROM node_paths p
-                    JOIN nodes n2 ON p.ancestor_id = n2.id
-                    WHERE p.descendant_id = ? AND p.ancestor_id != p.descendant_id
-                    ORDER BY n2.level
-                """, (node_id,))
-                
-                path_codes = [r['code'] for r in cursor.fetchall() if r['code']]
-                path_str = ' → '.join(path_codes)
-                
-                if key not in codes_dict:
-                    codes_dict[key] = set()
-                if path_str:
-                    codes_dict[key].add(path_str)
+            path_codes = [r['code'] for r in cursor.fetchall() if r['code']]
+            path_str = ' → '.join(path_codes)
+            
+            if key not in codes_dict:
+                codes_dict[key] = set()
+            if path_str:
+                codes_dict[key].add(path_str)
         
         if not codes_dict:
             continue
@@ -387,7 +387,7 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
         
         # Data
         for (code, name, label_de, label_en), paths in sorted(codes_dict.items(), key=lambda x: x[0][0]):
-                # Pfad NUR wenn mehrere (= Duplikate)
+            # Pfad NUR wenn mehrere (= Duplikate)
             if len(paths) > 1:
                 for path in sorted(paths):
                     row_data = [

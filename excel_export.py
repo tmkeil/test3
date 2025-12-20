@@ -86,16 +86,22 @@ def _analyze_shared_codes(cursor, family_id: int, groups: List[dict]) -> dict:
         
         # Für Level 1, 2, 3... (nicht Level 0 = Familie)
         for level in range(1, max_level + 1):
-            # Hole DISTINCT Codes die zur Familie gehören
+            # Hole DISTINCT Codes die zur Familie gehören UND zu dieser Gruppe führen
             cursor.execute("""
                 SELECT DISTINCT n.code
                 FROM nodes n
-                JOIN node_paths p ON p.descendant_id = n.id
-                WHERE p.ancestor_id = ?
-                AND n.group_name = ? 
+                JOIN node_paths p1 ON p1.descendant_id = n.id
+                WHERE p1.ancestor_id = ?
                 AND n.level = ?
                 AND n.code IS NOT NULL
-            """, (family_id, gname, level))
+                AND EXISTS (
+                    SELECT 1
+                    FROM nodes descendant
+                    JOIN node_paths p2 ON p2.descendant_id = descendant.id
+                    WHERE p2.ancestor_id = n.id
+                    AND descendant.group_name = ?
+                )
+            """, (family_id, level, gname))
             
             for row in cursor.fetchall():
                 code = row['code']
@@ -104,11 +110,17 @@ def _analyze_shared_codes(cursor, family_id: int, groups: List[dict]) -> dict:
                 cursor.execute("""
                     SELECT n.id, n.name
                     FROM nodes n
-                    JOIN node_paths p ON p.descendant_id = n.id
-                    WHERE p.ancestor_id = ?
+                    JOIN node_paths p1 ON p1.descendant_id = n.id
+                    WHERE p1.ancestor_id = ?
                     AND n.code = ? 
-                    AND n.level = ? 
-                    AND n.group_name = ?
+                    AND n.level = ?
+                    AND EXISTS (
+                        SELECT 1
+                        FROM nodes descendant
+                        JOIN node_paths p2 ON p2.descendant_id = descendant.id
+                        WHERE p2.ancestor_id = n.id
+                        AND descendant.group_name = ?
+                    )
                     LIMIT 1
                 """, (family_id, code, level, gname))
                 
@@ -326,15 +338,21 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
                 level_name = seg_names[level]
                 break
         
-        # Hole ALLE Nodes auf diesem Level, die zur Familie gehören
+        # Hole ALLE Nodes auf diesem Level, die zur Familie gehören UND zu dieser Gruppe führen
         cursor.execute("""
             SELECT DISTINCT n.id, n.code, n.name
             FROM nodes n
-            JOIN node_paths p ON p.descendant_id = n.id
-            WHERE p.ancestor_id = ?
-            AND n.level = ? 
-            AND n.group_name = ?
+            JOIN node_paths p1 ON p1.descendant_id = n.id
+            WHERE p1.ancestor_id = ?
+            AND n.level = ?
             AND n.code IS NOT NULL
+            AND EXISTS (
+                SELECT 1
+                FROM nodes descendant
+                JOIN node_paths p2 ON p2.descendant_id = descendant.id
+                WHERE p2.ancestor_id = n.id
+                AND descendant.group_name = ?
+            )
         """, (family_id, level, gname))
         
         all_nodes = cursor.fetchall()

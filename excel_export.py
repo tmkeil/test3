@@ -69,6 +69,9 @@ def _analyze_shared_codes(cursor, family_id: int, groups: List[dict]) -> dict:
             }
         }
     """
+    print(f"\n=== SHARED CODES ANALYSIS START ===")
+    print(f"Family ID: {family_id}, Anzahl Gruppen: {len(groups)}")
+    
     level_codes = defaultdict(set)  # level -> {(code, name, label, label_en, group_name)}
     
     for group in groups:
@@ -91,8 +94,7 @@ def _analyze_shared_codes(cursor, family_id: int, groups: List[dict]) -> dict:
                 WHERE p.ancestor_id = ?
                 AND n.group_name = ? 
                 AND n.level = ?
-                AND n.code IS NOT NULL 
-                AND n.full_typecode IS NOT NULL
+                AND n.code IS NOT NULL
             """, (family_id, gname, level))
             
             for row in cursor.fetchall():
@@ -100,14 +102,13 @@ def _analyze_shared_codes(cursor, family_id: int, groups: List[dict]) -> dict:
                 
                 # Hole EINEN Beispiel-Node für Attribute
                 cursor.execute("""
-                    SELECT n.id, n.name, n.full_typecode
+                    SELECT n.id, n.name
                     FROM nodes n
                     JOIN node_paths p ON p.descendant_id = n.id
                     WHERE p.ancestor_id = ?
                     AND n.code = ? 
                     AND n.level = ? 
                     AND n.group_name = ?
-                    AND n.full_typecode IS NOT NULL
                     LIMIT 1
                 """, (family_id, code, level, gname))
                 
@@ -129,6 +130,10 @@ def _analyze_shared_codes(cursor, family_id: int, groups: List[dict]) -> dict:
                 name = node['name'] or ''
                 
                 level_codes[level].add((code, name, label_de, label_en, gname))
+    
+    print(f"\n--- Level Codes gesammelt ---")
+    for level, codes in level_codes.items():
+        print(f"Level {level}: {len(codes)} einzigartige Codes")
     
     # Find shared codes
     shared_by_level = {}
@@ -154,6 +159,12 @@ def _analyze_shared_codes(cursor, family_id: int, groups: List[dict]) -> dict:
                     'groups': sorted(unique_groups)
                 }
                 total += 1
+    
+    print(f"\n--- Shared Codes Ergebnis ---")
+    print(f"Total shared codes: {total}")
+    for level, codes_dict in shared_by_level.items():
+        print(f"Level {level}: {len(codes_dict)} shared codes")
+    print(f"=== SHARED CODES ANALYSIS END ===\n")
     
     return {'total': total, 'by_level': shared_by_level}
 
@@ -305,6 +316,8 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
     
     # WICHTIG: Für JEDES Level (1, 2, 3...) EINE Tabelle (nicht pro Pattern!)
     for level in range(1, max_level + 1):
+        print(f"\n--- Processing Level {level} ---")
+        
         # Level Name aus einem der Patterns holen
         level_name = f"Level {level}"
         for pattern in patterns:
@@ -315,19 +328,21 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
         
         # Hole ALLE Nodes auf diesem Level, die zur Familie gehören
         cursor.execute("""
-            SELECT DISTINCT n.id, n.code, n.name, n.full_typecode
+            SELECT DISTINCT n.id, n.code, n.name
             FROM nodes n
             JOIN node_paths p ON p.descendant_id = n.id
             WHERE p.ancestor_id = ?
             AND n.level = ? 
             AND n.group_name = ?
-            AND n.code IS NOT NULL 
-            AND n.full_typecode IS NOT NULL
+            AND n.code IS NOT NULL
         """, (family_id, level, gname))
         
         all_nodes = cursor.fetchall()
         if not all_nodes:
+            print(f"  Keine Nodes gefunden für Level {level}")
             continue
+        
+        print(f"  {len(all_nodes)} Nodes gefunden")
         
         # Dedupliziere nach (code, name, label, label_en)
         codes_dict = {}  # (code, name, label, label_en) -> set(paths)
@@ -372,7 +387,10 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
             if path_str:
                 codes_dict[key].add(path_str)
         
+        print(f"  Nach Deduplizierung: {len(codes_dict)} einzigartige Codes")
+        
         if not codes_dict:
+            print(f"  SKIP: Keine Codes nach Filterung")
             continue
         
         # Level Header

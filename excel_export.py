@@ -74,58 +74,61 @@ def _analyze_shared_codes(cursor, family_id: int, groups: List[dict]) -> dict:
     for group in groups:
         gname = group['group_name']
         
+        # Finde max Level für diese Gruppe
+        max_level = 0
         for pattern in group['patterns']:
             pstring = pattern['pattern_string'] if isinstance(pattern, dict) else pattern.pattern_string
             num_segs = len(pstring.split('-'))
+            max_level = max(max_level, num_segs - 1)
+        
+        # Für Level 1, 2, 3... (nicht Level 0 = Familie)
+        for level in range(1, max_level + 1):
+            # Hole DISTINCT Codes die zur Familie gehören
+            cursor.execute("""
+                SELECT DISTINCT n.code
+                FROM nodes n
+                JOIN node_paths p ON p.descendant_id = n.id
+                WHERE p.ancestor_id = ?
+                AND n.group_name = ? 
+                AND n.level = ?
+                AND n.code IS NOT NULL 
+                AND n.full_typecode IS NOT NULL
+            """, (family_id, gname, level))
             
-            # Für Level 1, 2, 3... (nicht Level 0 = Familie)
-            for level in range(1, num_segs):
-                # Hole DISTINCT Codes die zur Familie gehören
+            for row in cursor.fetchall():
+                code = row['code']
+                
+                # Hole EINEN Beispiel-Node für Attribute
                 cursor.execute("""
-                    SELECT DISTINCT n.code
+                    SELECT n.id, n.name, n.full_typecode
                     FROM nodes n
                     JOIN node_paths p ON p.descendant_id = n.id
                     WHERE p.ancestor_id = ?
-                    AND n.group_name = ? 
-                    AND n.level = ?
-                    AND n.code IS NOT NULL 
+                    AND n.code = ? 
+                    AND n.level = ? 
+                    AND n.group_name = ?
                     AND n.full_typecode IS NOT NULL
-                """, (family_id, gname, level))
+                    LIMIT 1
+                """, (family_id, code, level, gname))
                 
-                for row in cursor.fetchall():
-                    code = row['code']
-                    
-                    # Hole EINEN Beispiel-Node für Attribute
-                    cursor.execute("""
-                        SELECT n.id, n.name, n.full_typecode
-                        FROM nodes n
-                        JOIN node_paths p ON p.descendant_id = n.id
-                        WHERE p.ancestor_id = ?
-                        AND n.code = ? 
-                        AND n.level = ? 
-                        AND n.group_name = ?
-                        AND n.full_typecode IS NOT NULL
-                        LIMIT 1
-                    """, (family_id, code, level, gname))
-                    
-                    node = cursor.fetchone()
-                    if not node:
-                        continue
-                    
-                    # Get labels
-                    cursor.execute("""
-                        SELECT label_de, label_en
-                        FROM node_labels
-                        WHERE node_id = ?
-                        ORDER BY display_order
-                    """, (node['id'],))
-                    
-                    labels = cursor.fetchall()
-                    label_de = '\n\n'.join([l['label_de'] for l in labels if l['label_de']])
-                    label_en = '\n\n'.join([l['label_en'] for l in labels if l['label_en']])
-                    name = node['name'] or ''
-                    
-                    level_codes[level].add((code, name, label_de, label_en, gname))
+                node = cursor.fetchone()
+                if not node:
+                    continue
+                
+                # Get labels
+                cursor.execute("""
+                    SELECT label_de, label_en
+                    FROM node_labels
+                    WHERE node_id = ?
+                    ORDER BY display_order
+                """, (node['id'],))
+                
+                labels = cursor.fetchall()
+                label_de = '\n\n'.join([l['label_de'] for l in labels if l['label_de']])
+                label_en = '\n\n'.join([l['label_en'] for l in labels if l['label_en']])
+                name = node['name'] or ''
+                
+                level_codes[level].add((code, name, label_de, label_en, gname))
     
     # Find shared codes
     shared_by_level = {}

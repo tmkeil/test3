@@ -79,7 +79,7 @@ def _analyze_shared_codes(cursor, family_id: int, groups: List[dict]) -> dict:
         for pattern in group['patterns']:
             pstring = pattern['pattern_string'] if isinstance(pattern, dict) else pattern.pattern_string
             num_segs = len(pstring.split('-'))
-            max_level = max(max_level, num_segs - 1)
+            max_level = max(max_level, num_segs)
         
         # Für Level 1, 2, 3... (nicht Level 0 = Familie)
         for level in range(1, max_level + 1):
@@ -301,7 +301,7 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
     for pattern in patterns:
         pstring = pattern['pattern_string'] if isinstance(pattern, dict) else pattern.pattern_string
         num_segs = len(pstring.split('-'))
-        max_level = max(max_level, num_segs - 1)
+        max_level = max(max_level, num_segs)
     
     # WICHTIG: Für JEDES Level (1, 2, 3...) EINE Tabelle (nicht pro Pattern!)
     for level in range(1, max_level + 1):

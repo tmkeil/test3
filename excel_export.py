@@ -398,12 +398,12 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
             """, (node_id,))
             
             path_codes = [r['code'] for r in cursor.fetchall() if r['code']]
-            path_str = ' → '.join(path_codes)
+            path_str = ' → '.join(path_codes) if path_codes else ''
             
             if key not in codes_dict:
                 codes_dict[key] = set()
-            if path_str:
-                codes_dict[key].add(path_str)
+            # Füge Pfad immer hinzu (auch wenn leer), damit wir zählen können
+            codes_dict[key].add(path_str)
         
         print(f"  Nach Deduplizierung: {len(codes_dict)} einzigartige Codes")
         
@@ -426,9 +426,12 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
         
         # Data
         for (code, name, label_de, label_en), paths in sorted(codes_dict.items(), key=lambda x: x[0][0]):
+            # Entferne leere Pfade aus dem Set
+            non_empty_paths = [p for p in paths if p]
+            
             # Pfad NUR wenn mehrere (= Duplikate)
-            if len(paths) > 1:
-                for path in sorted(paths):
+            if len(non_empty_paths) > 1:
+                for path in sorted(non_empty_paths):
                     row_data = [
                         path, code, name,
                         label_de[:100] + '...' if len(label_de) > 100 else label_de,
@@ -444,7 +447,7 @@ def _create_group_sheet(ws, cursor, family_id: int, family_code: str, group: dic
                             cell.font = Font(size=8, italic=True)
                     current_row += 1
             else:
-                # Kein Pfad (einzigartig)
+                # Kein Pfad (einzigartig oder alle Pfade identisch)
                 row_data = [
                     '', code, name,
                     label_de[:100] + '...' if len(label_de) > 100 else label_de,

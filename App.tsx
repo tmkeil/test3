@@ -2182,6 +2182,12 @@ const SmartAddNodeModal: React.FC<SmartAddNodeModalProps> = ({
       // Invalidate queries to refresh UI
       queryClient.invalidateQueries({ queryKey: ['families'] });
       queryClient.invalidateQueries({ queryKey: ['product-families'] });
+      
+      // WICHTIG: Invalidate children queries für das aktuelle Level
+      // Dies sorgt dafür dass der neue Node sofort im Dropdown erscheint
+      queryClient.invalidateQueries({ queryKey: ['children', level] });
+      queryClient.invalidateQueries({ queryKey: ['options'] });
+      
       // Invalidate all level-options from this level and above
       for (let i = level; i <= 20; i++) {
         queryClient.invalidateQueries({ queryKey: ['level-options', i] });
@@ -4802,6 +4808,8 @@ const AddNodeModal: React.FC<AddNodeModalProps> = ({ isOpen, onClose }) => {
         // Invalidate queries to refresh UI
         queryClient.invalidateQueries({ queryKey: ['families'] });
         queryClient.invalidateQueries({ queryKey: ['product-families'] });
+        queryClient.invalidateQueries({ queryKey: ['children', formData.level] });
+        queryClient.invalidateQueries({ queryKey: ['options'] });
         for (let i = formData.level; i <= 20; i++) {
           queryClient.invalidateQueries({ queryKey: ['level-options', i] });
         }
@@ -5414,7 +5422,8 @@ const VariantenbaumConfigurator: React.FC = () => {
       }
       return getKMATReference(selectedFamily.id, pathNodeIds);
     },
-    enabled: !!selectedFamily?.id && !!typecode && pathNodeIds.length > 0 && user?.role === 'admin',
+    // KMAT ist für ALLE sichtbar, nicht nur Admins
+    enabled: !!selectedFamily?.id && !!typecode && pathNodeIds.length > 0,
     staleTime: 10000,
   });
 
@@ -5425,8 +5434,15 @@ const VariantenbaumConfigurator: React.FC = () => {
       alert(`✅ ${data.message}: ${data.kmat_reference}`);
       setShowKMATModal(false);
       setKMATInput('');
-      // Invalidate KMAT query to refresh
+      // Invalidate KMAT query mit spezifischen Parametern UND generell
+      queryClient.invalidateQueries({ 
+        queryKey: ['kmat-reference', selectedFamily?.id, pathNodeIds] 
+      });
       queryClient.invalidateQueries({ queryKey: ['kmat-reference'] });
+      // Force refetch nach kurzem Timeout
+      setTimeout(() => {
+        kmatQuery.refetch();
+      }, 100);
     },
     onError: (error: any) => {
       alert(`❌ Fehler: ${error.message || 'Unbekannter Fehler'}`);
